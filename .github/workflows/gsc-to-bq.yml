@@ -35,4 +35,4 @@ jobs:
     - name: Run Python script
       run: python gsc-to-bq.py
       env:
-        SERVICE_ACCOUNT_FILE: gcp-key.json
+        BAMTABRIDSAZAN_GCP_SA_KEY_BASE64: ${{ secrets.BAMTABRIDSAZAN_GCP_SA_KEY_BASE64 }}
