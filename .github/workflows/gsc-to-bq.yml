@@ -32,7 +32,7 @@ jobs:
             echo "Error: Secret BAMTABRIDSAZAN_GCP_SA_KEY is empty!"
             exit 1
           fi
-          echo "${{ secrets.BAMTABRIDSAZAN_GCP_SA_KEY }}" > gcp-key.json
+          printf "%s" "${{ secrets.BAMTABRIDSAZAN_GCP_SA_KEY }}" > gcp-key.json
         shell: bash
 
       - name: Validate JSON (Python)
