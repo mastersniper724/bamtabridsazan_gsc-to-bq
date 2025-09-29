@@ -5,15 +5,10 @@ import pandas as pd
 from datetime import datetime, timedelta
 import hashlib
 import time
-
-# ---------- CONFIG ----------
 import os
 import json
-from google.oauth2 import service_account
 
-# Service Account از Secret
-sa_info = json.loads(os.environ["BAMTABRIDSAZAN_GCP_SA_KEY"])
-credentials = service_account.Credentials.from_service_account_info(sa_info)
+# ---------- CONFIG ----------
 SITE_URL = 'https://bamtabridsazan.com/'
 BQ_PROJECT = 'bamtabridsazan'
 BQ_DATASET = 'seo_reports'
@@ -23,7 +18,14 @@ START_DATE = (datetime.utcnow() - timedelta(days=480)).strftime('%Y-%m-%d') # 16
 END_DATE = (datetime.utcnow() - timedelta(days=1)).strftime('%Y-%m-%d')      # yesterday
 RETRY_DELAY = 60  # seconds in case of timeout
 
-# ---------- CREDENTIALS ----------
+# ---------- CREDENTIALS FROM SECRET ----------
+# Secret را به صورت فایل موقت بسازیم
+sa_info = json.loads(os.environ["BAMTABRIDSAZAN_GCP_SA_KEY"])
+with open("gcp-key.json", "w") as f:
+    json.dump(sa_info, f)
+
+SERVICE_ACCOUNT_FILE = "gcp-key.json"
+
 credentials = service_account.Credentials.from_service_account_file(
     SERVICE_ACCOUNT_FILE,
     scopes=[
