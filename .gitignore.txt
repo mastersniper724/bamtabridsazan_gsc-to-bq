@@ -1,3 +1,4 @@
 *.json
+bamtabridsazan-gsc-to-bq.json
 venv/
 __pycache__/
