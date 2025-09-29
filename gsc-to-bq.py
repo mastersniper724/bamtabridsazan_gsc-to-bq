@@ -14,32 +14,48 @@ BQ_PROJECT = 'bamtabridsazan'
 BQ_DATASET = 'seo_reports'
 BQ_TABLE = 'raw_gsc_data'
 ROW_LIMIT = 25000
-START_DATE = (datetime.utcnow() - timedelta(days=480)).strftime('%Y-%m-%d')  # 16 months ago
-END_DATE = (datetime.utcnow() - timedelta(days=1)).strftime('%Y-%m-%d')       # yesterday
+START_DATE = (datetime.utcnow() - timedelta(days=480)).strftime('%Y-%m-%d') # 16 months ago
+END_DATE = (datetime.utcnow() - timedelta(days=1)).strftime('%Y-%m-%d')      # yesterday
 RETRY_DELAY = 60  # seconds in case of timeout
 
 # ---------- CREDENTIALS ----------
-# بارگذاری Service Account از Secret
 sa_info = json.loads(os.environ["BAMTABRIDSAZAN_GCP_SA_KEY"])
-
-# ایجاد فایل موقت JSON
-with open("gcp-key.json", "w") as f:
-    json.dump(sa_info, f)
-
-credentials = service_account.Credentials.from_service_account_file(
-    "gcp-key.json",
-    scopes=[
-        'https://www.googleapis.com/auth/webmasters.readonly',
-        'https://www.googleapis.com/auth/bigquery'
-    ]
-)
+credentials = service_account.Credentials.from_service_account_info(sa_info)
+scopes = [
+    'https://www.googleapis.com/auth/webmasters.readonly',
+    'https://www.googleapis.com/auth/bigquery'
+]
 
 # ---------- GSC SERVICE ----------
 service = build('searchconsole', 'v1', credentials=credentials)
 
 # ---------- BIGQUERY CLIENT ----------
-bq_client = bigquery.Client(credentials=credentials, project=credentials.project_id)
-table_ref = bq_client.dataset(BQ_DATASET).table(BQ_TABLE)
+bq_client = bigquery.Client(credentials=credentials, project=BQ_PROJECT)
+dataset_ref = bq_client.dataset(BQ_DATASET)
+table_ref = dataset_ref.table(BQ_TABLE)
+
+# ---------- CREATE TABLE IF NOT EXISTS ----------
+def create_table_if_not_exists():
+    try:
+        bq_client.get_table(table_ref)
+        print(f"Table {BQ_TABLE} already exists.")
+    except Exception:
+        print(f"Table {BQ_TABLE} does not exist. Creating...")
+        schema = [
+            bigquery.SchemaField("Date", "DATE"),
+            bigquery.SchemaField("Query", "STRING"),
+            bigquery.SchemaField("Page", "STRING"),
+            bigquery.SchemaField("Clicks", "INTEGER"),
+            bigquery.SchemaField("Impressions", "INTEGER"),
+            bigquery.SchemaField("CTR", "FLOAT"),
+            bigquery.SchemaField("Position", "FLOAT"),
+            bigquery.SchemaField("unique_key", "STRING")
+        ]
+        table = bigquery.Table(table_ref, schema=schema)
+        bq_client.create_table(table)
+        print(f"Table {BQ_TABLE} created successfully.")
+
+create_table_if_not_exists()
 
 # ---------- HELPER: create unique key ----------
 def generate_key(date, query, page):
@@ -59,6 +75,7 @@ def fetch_gsc_data(start_date, end_date):
     all_rows = []
     start_row = 0
     existing_keys = get_existing_keys()
+    batch_number = 1
 
     while True:
         request = {
@@ -72,7 +89,7 @@ def fetch_gsc_data(start_date, end_date):
         try:
             resp = service.searchanalytics().query(siteUrl=SITE_URL, body=request).execute()
         except Exception as e:
-            print("Timeout or error, retrying in {} sec...".format(RETRY_DELAY))
+            print(f"Timeout or error, retrying in {RETRY_DELAY} sec...")
             time.sleep(RETRY_DELAY)
             continue
 
@@ -92,6 +109,9 @@ def fetch_gsc_data(start_date, end_date):
             if key not in existing_keys:
                 existing_keys.add(key)
                 all_rows.append([date, query_text, page, clicks, impressions, ctr, position, key])
+
+        print(f"Batch {batch_number}: fetched {len(rows)} rows from GSC")
+        batch_number += 1
 
         if len(rows) < ROW_LIMIT:
             break
