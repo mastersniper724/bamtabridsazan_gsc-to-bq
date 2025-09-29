@@ -7,7 +7,7 @@ import hashlib
 import time
 
 # ---------- CONFIG ----------
-SERVICE_ACCOUNT_FILE = '/path/to/service_account.json'
+SERVICE_ACCOUNT_FILE = '/Users/drgoil/Desktop/Business/SEO/Projects/Bamtabridsazan/gsc-to-bq/bamtabridsazan-gsc-to-bq.json'
 SITE_URL = 'https://bamtabridsazan.com/'
 BQ_PROJECT = 'bamtabridsazan'
 BQ_DATASET = 'seo_reports'
