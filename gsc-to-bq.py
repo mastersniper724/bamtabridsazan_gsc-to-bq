@@ -36,9 +36,9 @@ table_ref = bq_client.dataset(BQ_DATASET).table(BQ_TABLE)
 def ensure_table():
     try:
         bq_client.get_table(table_ref)
-        print(f"[INFO] Table {BQ_TABLE} exists.")
+        print(f"[INFO] Table {BQ_TABLE} exists.", flush=True)
     except:
-        print(f"[INFO] Table {BQ_TABLE} not found. Creating...")
+        print(f"[INFO] Table {BQ_TABLE} not found. Creating...", flush=True)
         schema = [
             bigquery.SchemaField("Date", "DATE"),
             bigquery.SchemaField("Query", "STRING"),
@@ -62,10 +62,10 @@ def get_existing_keys():
     try:
         query = f"SELECT unique_key FROM `{BQ_PROJECT}.{BQ_DATASET}.{BQ_TABLE}`"
         df = bq_client.query(query).to_dataframe()
-        print(f"[INFO] Retrieved {len(df)} existing keys from BigQuery.")
+        print(f"[INFO] Retrieved {len(df)} existing keys from BigQuery.", flush=True)
         return set(df['unique_key'].astype(str).tolist())
     except Exception as e:
-        print(f"[WARN] Failed to fetch existing keys: {e}")
+        print(f"[WARN] Failed to fetch existing keys: {e}", flush=True)
         return set()
 
 # ---------- FETCH GSC DATA ----------
@@ -87,13 +87,13 @@ def fetch_gsc_data(start_date, end_date):
         try:
             resp = service.searchanalytics().query(siteUrl=SITE_URL, body=request).execute()
         except Exception as e:
-            print(f"[ERROR] Timeout or error: {e}, retrying in {RETRY_DELAY} sec...")
+            print(f"[ERROR] Timeout or error: {e}, retrying in {RETRY_DELAY} sec...", flush=True)
             time.sleep(RETRY_DELAY)
             continue
 
         rows = resp.get('rows', [])
         if not rows:
-            print("[INFO] No more rows returned from GSC.")
+            print("[INFO] No more rows returned from GSC.", flush=True)
             break
 
         batch_count = 0
@@ -111,7 +111,7 @@ def fetch_gsc_data(start_date, end_date):
                 all_rows.append([date, query_text, page, clicks, impressions, ctr, position, key])
                 batch_count += 1
 
-        print(f"[INFO] Batch {batch_index}: Fetched {len(rows)} rows, {batch_count} new rows.")
+        print(f"[INFO] Batch {batch_index}: Fetched {len(rows)} rows, {batch_count} new rows.", flush=True)
         batch_index += 1
 
         if batch_count > 0:
@@ -121,7 +121,7 @@ def fetch_gsc_data(start_date, end_date):
             )
             upload_to_bq(df_batch)
         else:
-            print(f"[INFO] Batch {batch_index} has no new rows.")
+            print(f"[INFO] Batch {batch_index} has no new rows.", flush=True)
 
         if len(rows) < ROW_LIMIT:
             break
@@ -132,17 +132,17 @@ def fetch_gsc_data(start_date, end_date):
 # ---------- UPLOAD TO BIGQUERY ----------
 def upload_to_bq(df):
     if df.empty:
-        print("[INFO] No new rows to insert.")
+        print("[INFO] No new rows to insert.", flush=True)
         return
     try:
         job = bq_client.load_table_from_dataframe(df, table_ref)
         job.result()
-        print(f"[INFO] Inserted {len(df)} rows to BigQuery.")
+        print(f"[INFO] Inserted {len(df)} rows to BigQuery.", flush=True)
     except Exception as e:
-        print(f"[ERROR] Failed to insert rows: {e}")
+        print(f"[ERROR] Failed to insert rows: {e}", flush=True)
 
 # ---------- MAIN ----------
 if __name__ == "__main__":
     ensure_table()
     df = fetch_gsc_data(START_DATE, END_DATE)
-    print(f"[INFO] Finished fetching all data. Total new rows: {len(df)}")
+    print(f"[INFO] Finished fetching all data. Total new rows: {len(df)}", flush=True)
