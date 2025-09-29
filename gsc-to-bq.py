@@ -29,20 +29,14 @@ credentials = service_account.Credentials.from_service_account_info(sa_info)
 # Build Search Console service
 service = build('searchconsole', 'v1', credentials=credentials)
 
-SITE_URL = 'https://bamtabridsazan.com/'
-
 # --- Check access ---
 try:
     response = service.sites().get(siteUrl=SITE_URL).execute()
-    print(f"✅ Service Account has access to {SITE_URL}")
+    print(f"✅ Service Account has access to {SITE_URL}", flush=True)
 except Exception as e:
     print(f"❌ Service Account does NOT have access to {SITE_URL}", flush=True)
     print("Error details:", e)
-    sys.exit(1)  # Stop the script if access not granted
-
-
-# ---------- GSC SERVICE ----------
-service = build('searchconsole', 'v1', credentials=credentials)
+    sys.exit(1)
 
 # ---------- BIGQUERY CLIENT ----------
 bq_client = bigquery.Client(credentials=credentials, project=credentials.project_id)
@@ -67,7 +61,7 @@ def ensure_table():
         ]
         table = bigquery.Table(table_ref, schema=schema)
         bq_client.create_table(table)
-        print(f"[INFO] Table {BQ_TABLE} created.")
+        print(f"[INFO] Table {BQ_TABLE} created.", flush=True)
 
 # ---------- HELPER: create unique key ----------
 def generate_key(date, query, page):
@@ -83,6 +77,20 @@ def get_existing_keys():
     except Exception as e:
         print(f"[WARN] Failed to fetch existing keys: {e}", flush=True)
         return set()
+
+# ---------- UPLOAD TO BIGQUERY ----------
+def upload_to_bq(df):
+    if df.empty:
+        print("[INFO] No new rows to insert.", flush=True)
+        return
+    # ---------- CONVERT DATE COLUMN ----------
+    df['Date'] = pd.to_datetime(df['Date'])
+    try:
+        job = bq_client.load_table_from_dataframe(df, table_ref)
+        job.result()
+        print(f"[INFO] Inserted {len(df)} rows to BigQuery.", flush=True)
+    except Exception as e:
+        print(f"[ERROR] Failed to insert rows: {e}", flush=True)
 
 # ---------- FETCH GSC DATA ----------
 def fetch_gsc_data(start_date, end_date):
@@ -144,18 +152,6 @@ def fetch_gsc_data(start_date, end_date):
         start_row += len(rows)
 
     return pd.DataFrame(all_rows, columns=['Date','Query','Page','Clicks','Impressions','CTR','Position','unique_key'])
-
-# ---------- UPLOAD TO BIGQUERY ----------
-def upload_to_bq(df):
-    if df.empty:
-        print("[INFO] No new rows to insert.", flush=True)
-        return
-    try:
-        job = bq_client.load_table_from_dataframe(df, table_ref)
-        job.result()
-        print(f"[INFO] Inserted {len(df)} rows to BigQuery.", flush=True)
-    except Exception as e:
-        print(f"[ERROR] Failed to insert rows: {e}", flush=True)
 
 # ---------- MAIN ----------
 if __name__ == "__main__":
