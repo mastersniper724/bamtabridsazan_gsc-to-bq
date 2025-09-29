@@ -7,6 +7,7 @@ import hashlib
 import time
 import os
 import json
+import sys
 
 # ---------- CONFIG ----------
 SITE_URL = 'https://bamtabridsazan.com/'
@@ -24,6 +25,21 @@ with open(service_account_file, "r") as f:
     sa_info = json.load(f)
 
 credentials = service_account.Credentials.from_service_account_info(sa_info)
+
+# Build Search Console service
+service = build('searchconsole', 'v1', credentials=credentials)
+
+SITE_URL = 'https://bamtabridsazan.com/'
+
+# --- Check access ---
+try:
+    response = service.sites().get(siteUrl=SITE_URL).execute()
+    print(f"✅ Service Account has access to {SITE_URL}")
+except Exception as e:
+    print(f"❌ Service Account does NOT have access to {SITE_URL}", flush=True)
+    print("Error details:", e)
+    sys.exit(1)  # Stop the script if access not granted
+
 
 # ---------- GSC SERVICE ----------
 service = build('searchconsole', 'v1', credentials=credentials)
