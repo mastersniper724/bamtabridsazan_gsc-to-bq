@@ -14,20 +14,20 @@ BQ_PROJECT = 'bamtabridsazan'
 BQ_DATASET = 'seo_reports'
 BQ_TABLE = 'raw_gsc_data'
 ROW_LIMIT = 25000
-START_DATE = (datetime.utcnow() - timedelta(days=480)).strftime('%Y-%m-%d') # 16 months ago
-END_DATE = (datetime.utcnow() - timedelta(days=1)).strftime('%Y-%m-%d')      # yesterday
+START_DATE = (datetime.utcnow() - timedelta(days=480)).strftime('%Y-%m-%d')  # 16 months ago
+END_DATE = (datetime.utcnow() - timedelta(days=1)).strftime('%Y-%m-%d')       # yesterday
 RETRY_DELAY = 60  # seconds in case of timeout
 
-# ---------- CREDENTIALS FROM SECRET ----------
-# Secret را به صورت فایل موقت بسازیم
+# ---------- CREDENTIALS ----------
+# بارگذاری Service Account از Secret
 sa_info = json.loads(os.environ["BAMTABRIDSAZAN_GCP_SA_KEY"])
+
+# ایجاد فایل موقت JSON
 with open("gcp-key.json", "w") as f:
     json.dump(sa_info, f)
 
-SERVICE_ACCOUNT_FILE = "gcp-key.json"
-
 credentials = service_account.Credentials.from_service_account_file(
-    SERVICE_ACCOUNT_FILE,
+    "gcp-key.json",
     scopes=[
         'https://www.googleapis.com/auth/webmasters.readonly',
         'https://www.googleapis.com/auth/bigquery'
