@@ -7,7 +7,13 @@ import hashlib
 import time
 
 # ---------- CONFIG ----------
-SERVICE_ACCOUNT_FILE = '/Users/drgoil/Desktop/Business/SEO/Projects/Bamtabridsazan/gsc-to-bq/bamtabridsazan-gsc-to-bq.json'
+import os
+import json
+from google.oauth2 import service_account
+
+# Service Account از Secret
+sa_info = json.loads(os.environ["BAMTABRIDSAZAN_GCP_SA_KEY"])
+credentials = service_account.Credentials.from_service_account_info(sa_info)
 SITE_URL = 'https://bamtabridsazan.com/'
 BQ_PROJECT = 'bamtabridsazan'
 BQ_DATASET = 'seo_reports'
