@@ -1,12 +1,12 @@
 name: GSC to BigQuery
 
 on:
-  workflow_dispatch:   # اجرای دستی
   schedule:
-    - cron: "0 3 * * *"   # هر روز ساعت 3 صبح UTC
+    - cron: '0 21 * * *'  # 21:00 UTC == 02:00 Tehran
+  workflow_dispatch:
 
 jobs:
-  run:
+  run-gsc-to-bq:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repo
@@ -15,14 +15,17 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: "3.10"
+          python-version: '3.10'
 
       - name: Install dependencies
         run: |
-          pip install -r requirements.txt
+          python -m pip install --upgrade pip
+          pip install google-api-python-client google-cloud-bigquery pandas
+
+      - name: Write Service Account key
+        run: echo "${{ secrets.BAMTABRIDSAZAN_GCP_SA_KEY }}" > gcp-key.json
 
       - name: Run script
         env:
           BAMTABRIDSAZAN_GCP_SA_KEY: ${{ secrets.BAMTABRIDSAZAN_GCP_SA_KEY }}
-        run: |
-          python gsc-to-bq.py
+        run: python gsc-to-bq.py
