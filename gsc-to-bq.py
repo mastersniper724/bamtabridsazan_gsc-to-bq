@@ -70,6 +70,7 @@ def fetch_gsc_data(start_date, end_date):
     all_rows = []
     start_row = 0
     existing_keys = get_existing_keys()
+    batch_index = 1
 
     while True:
         request = {
@@ -107,7 +108,18 @@ def fetch_gsc_data(start_date, end_date):
                 all_rows.append([date, query_text, page, clicks, impressions, ctr, position, key])
                 batch_count += 1
 
-        print(f"[INFO] Fetched batch: {len(rows)} rows, {batch_count} new rows to insert.")
+        print(f"[INFO] Batch {batch_index}: Fetched {len(rows)} rows, {batch_count} new rows.")
+        batch_index += 1
+
+        if batch_count > 0:
+            df_batch = pd.DataFrame(
+                all_rows[-batch_count:],  # فقط رکوردهای جدید batch
+                columns=['Date','Query','Page','Clicks','Impressions','CTR','Position','unique_key']
+            )
+            upload_to_bq(df_batch)
+        else:
+            print(f"[INFO] Batch {batch_index} has no new rows.")
+
         if len(rows) < ROW_LIMIT:
             break
         start_row += len(rows)
@@ -122,7 +134,7 @@ def upload_to_bq(df):
     try:
         job = bq_client.load_table_from_dataframe(df, table_ref)
         job.result()
-        print(f"[INFO] {len(df)} rows inserted to BigQuery.")
+        print(f"[INFO] Inserted {len(df)} rows to BigQuery.")
     except Exception as e:
         print(f"[ERROR] Failed to insert rows: {e}")
 
@@ -130,4 +142,4 @@ def upload_to_bq(df):
 if __name__ == "__main__":
     ensure_table()
     df = fetch_gsc_data(START_DATE, END_DATE)
-    upload_to_bq(df)
+    print(f"[INFO] Finished fetching all data. Total new rows: {len(df)}")
