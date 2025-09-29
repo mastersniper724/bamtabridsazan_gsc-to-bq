@@ -21,7 +21,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install google-api-python-client google-cloud-bigquery pandas
+          pip install google-api-python-client google-cloud-bigquery pandas pyarrow
 
       - name: Write Service Account Key (supports base64 or raw JSON)
         shell: bash
