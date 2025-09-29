@@ -60,6 +60,7 @@ def ensure_table():
             bigquery.SchemaField("unique_key", "STRING"),
         ]
         table = bigquery.Table(table_ref, schema=schema)
+        table.clustering_fields = ["Date", "Query"]  # ← اضافه شد
         bq_client.create_table(table)
         print(f"[INFO] Table {BQ_TABLE} created.", flush=True)
 
