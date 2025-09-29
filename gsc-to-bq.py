@@ -19,7 +19,10 @@ END_DATE = (datetime.utcnow() - timedelta(days=1)).strftime('%Y-%m-%d')      # y
 RETRY_DELAY = 60  # seconds in case of timeout
 
 # ---------- CREDENTIALS ----------
-sa_info = json.loads(os.environ["BAMTABRIDSAZAN_GCP_SA_KEY_BASE64"])
+service_account_file = os.environ.get("SERVICE_ACCOUNT_FILE", "gcp-key.json")
+with open(service_account_file, "r") as f:
+    sa_info = json.load(f)
+
 credentials = service_account.Credentials.from_service_account_info(sa_info)
 
 # ---------- GSC SERVICE ----------
