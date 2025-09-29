@@ -13,7 +13,7 @@ jobs:
 
       - name: Write GCP Key to file
         run: |
-          echo "${{ secrets.BAMTABRIDSAZAN_GCP_KEY }}" > gcp-key.json
+          echo "${{ secrets.GCP_KEY }}" > gcp-key.json
           echo "✅ Secret written to gcp-key.json"
 
       - name: Validate JSON format
