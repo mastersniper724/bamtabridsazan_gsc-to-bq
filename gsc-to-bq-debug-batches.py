@@ -25,14 +25,14 @@ def main():
         for i in range(total_batches):
             print(f"Fetching batch {i+1}...")
             batch = fetch_gsc_data(start_date=start_date, end_date=end_date)
-            print(f"Batch {i+1} type: {type(batch)}, length: {len(batch)}")
+            print(f"Batch {i+1} type: {type(batch)}, length: {len(batch) if hasattr(batch, '__len__') else 'unknown'}")
 
             # اگر batch شامل رشته است (مثل لیست repr شده دیکشنری‌ها)
             if isinstance(batch, list) and all(isinstance(r, str) for r in batch):
                 batch = [ast.literal_eval(r) for r in batch]
 
-            # اگر batch هنوز خالی است، هشدار بدهیم و رد کنیم
-            if not batch:
+            # بررسی batch خالی به شکل امن
+            if (isinstance(batch, pd.DataFrame) and batch.empty) or (isinstance(batch, list) and len(batch) == 0):
                 print(f"Warning: Batch {i+1} is empty, skipping")
                 continue
 
@@ -49,6 +49,9 @@ def main():
         if not all_batches:
             print("Warning: No data fetched in any batch! Exiting debug script.")
             f.write("Warning: No data fetched in any batch!\n")
+            # ایجاد CSVهای خالی برای artifact
+            pd.DataFrame().to_csv("output_debug.csv", index=False)
+            pd.DataFrame().to_csv("duplicates_report.csv", index=False)
             return
 
         # جمع کل ردیف‌ها
@@ -73,6 +76,12 @@ def main():
         # ذخیره CSV نهایی
         df_all.to_csv("output_debug.csv", index=False)
         print("Debug CSV with unique_key_new saved as output_debug.csv")
+
+    else:
+        # اگر DataFrame خالی بود، CSV خالی ایجاد می‌کنیم
+        pd.DataFrame().to_csv("output_debug.csv", index=False)
+        pd.DataFrame().to_csv("duplicates_report.csv", index=False)
+        print("No data available. Empty CSVs created.")
 
     print(f"Debug output saved to {debug_file}")
 
