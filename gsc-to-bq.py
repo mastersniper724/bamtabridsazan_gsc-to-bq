@@ -1,120 +1,106 @@
-# REVISION: rev.1
-from google.oauth2 import service_account
-from googleapiclient.discovery import build
-from google.cloud import bigquery
-import pandas as pd
-from datetime import datetime, timedelta
+# =================================================
+# FILE: gsc-to-bq_run_debug_compare.py
+# REV: 1
+# PURPOSE: Compare keys across multiple runs to detect real duplicates
+# =================================================
+
 import hashlib
-import time
-import os
-import json
-import sys
+from datetime import datetime
+import pandas as pd
 
-# ---------- CONFIG ----------
-SITE_URL = 'https://bamtabridsazan.com/'
-ROW_LIMIT = 5  # برای debug، هر batch فقط 5 رکورد
-START_DATE = (datetime.utcnow() - timedelta(days=480)).strftime('%Y-%m-%d')
-END_DATE = (datetime.utcnow() - timedelta(days=1)).strftime('%Y-%m-%d')
-RETRY_DELAY = 5  # ثانیه در صورت timeout
+# فرض نمونه داده‌ها (اینجا باید داده‌های GSC شما read شوند)
+# برای تست می‌توانید df1 و df2 را از دو run مختلف شبیه‌سازی کنید
+# df1 = pd.read_csv('run1_sample.csv')
+# df2 = pd.read_csv('run2_sample.csv')
 
-# ---------- CREDENTIALS ----------
-service_account_file = os.environ.get("SERVICE_ACCOUNT_FILE", "gcp-key.json")
-with open(service_account_file, "r") as f:
-    sa_info = json.load(f)
-credentials = service_account.Credentials.from_service_account_info(sa_info)
-service = build('searchconsole', 'v1', credentials=credentials)
-
-# ---------- BIGQUERY CLIENT ----------
-bq_client = bigquery.Client(credentials=credentials, project=credentials.project_id)
-
-# ---------- HELPER: create deterministic key ----------
 def stable_key(row):
-    query = (row.get('Query') or '').strip().lower()
-    page = (row.get('Page') or '').strip().lower().rstrip('/')
+    """
+    Generate deterministic hash key for a row
+    """
+    # ۱. Normalize fields
+    query = row.get('Query', '').strip()
+    page = row.get('Page', '').strip().rstrip('/')  # remove trailing slash
     date_raw = row.get('Date')
+    
+    # ۲. Normalize Date
     if isinstance(date_raw, str):
         date = date_raw[:10]
     elif isinstance(date_raw, datetime):
         date = date_raw.strftime("%Y-%m-%d")
     else:
         date = str(date_raw)[:10]
-    s = f"{query}|{page}|{date}"
-    print(f"[DEBUG] STRING TO HASH: '{s}'", flush=True)
-    key = hashlib.sha256(s.encode('utf-8')).hexdigest()
-    print(f"[DEBUG] GENERATED KEY: {key}", flush=True)
-    return key
 
-# ---------- FETCH EXISTING KEYS FROM BIGQUERY ----------
-def get_existing_keys():
-    # برای debug، می‌تونیم خالی فرض کنیم یا key های واقعی رو برگردونیم
-    try:
-        query = f"SELECT unique_key FROM `bamtabridsazan.seo_reports.bamtabridsazan__gsc__raw_data`"
-        df = bq_client.query(query).to_dataframe()
-        print(f"[INFO] Retrieved {len(df)} existing keys from BigQuery.", flush=True)
-        return set(df['unique_key'].astype(str).tolist())
-    except Exception as e:
-        print(f"[WARN] Failed to fetch existing keys: {e}", flush=True)
-        return set()
+    # ۳. Deterministic tuple & hash
+    det_tuple = (query, page, date)
+    s = "|".join(det_tuple)
+    return hashlib.sha256(s.encode('utf-8')).hexdigest()
 
-# ---------- FETCH GSC DATA ----------
-def fetch_gsc_data(start_date, end_date):
-    all_rows = []
-    start_row = 0
-    existing_keys = get_existing_keys()
-    batch_index = 1
+# =================================================
+# DEBUG COMPARISON FUNCTION
+# =================================================
+def compare_runs(run1_df, run2_df):
+    """
+    Compare two runs and print duplicates between them
+    """
+    print(f"[INFO] Run1 rows: {len(run1_df)}, Run2 rows: {len(run2_df)}")
 
-    while True:
-        request = {
-            'startDate': start_date,
-            'endDate': end_date,
-            'dimensions': ['date','query','page'],
-            'rowLimit': ROW_LIMIT,
-            'startRow': start_row
-        }
+    # Generate stable keys if not already present
+    if 'unique_key' not in run1_df.columns:
+        run1_df['unique_key'] = run1_df.apply(stable_key, axis=1)
+    if 'unique_key' not in run2_df.columns:
+        run2_df['unique_key'] = run2_df.apply(stable_key, axis=1)
 
-        try:
-            resp = service.searchanalytics().query(siteUrl=SITE_URL, body=request).execute()
-        except Exception as e:
-            print(f"[ERROR] Timeout or error: {e}, retrying in {RETRY_DELAY} sec...", flush=True)
-            time.sleep(RETRY_DELAY)
-            continue
+    # Compare keys
+    keys_run1 = set(run1_df['unique_key'])
+    keys_run2 = set(run2_df['unique_key'])
 
-        rows = resp.get('rows', [])
-        if not rows:
-            print("[INFO] No more rows returned from GSC.", flush=True)
-            break
+    duplicates = keys_run1 & keys_run2
+    new_in_run2 = keys_run2 - keys_run1
 
-        batch_count = 0
-        for r in rows:
-            date = r['keys'][0]
-            query_text = r['keys'][1]
-            page = r['keys'][2]
-            clicks = r.get('clicks',0)
-            impressions = r.get('impressions',0)
-            ctr = r.get('ctr',0)
-            position = r.get('position',0)
+    print(f"[INFO] Duplicates between runs: {len(duplicates)}")
+    for k in list(duplicates)[:5]:
+        print(f"  DUPLICATE KEY: {k}")
 
-            print(f"[DEBUG] RAW ROW: {r}", flush=True)
-            key = stable_key({'Query': query_text, 'Page': page, 'Date': date})
+    print(f"[INFO] New keys in Run2: {len(new_in_run2)}")
+    for k in list(new_in_run2)[:5]:
+        print(f"  NEW KEY: {k}")
 
-            if key not in existing_keys:
-                existing_keys.add(key)
-                all_rows.append([date, query_text, page, clicks, impressions, ctr, position, key])
-                batch_count += 1
+    return duplicates, new_in_run2
 
-        print(f"[INFO] Batch {batch_index}: Fetched {len(rows)} rows, {batch_count} new rows.", flush=True)
-        batch_index += 1
-        start_row += len(rows)
+# =================================================
+# BATCH DEBUG (مثلاً ۳ batch)
+# =================================================
+def process_batches(df, batch_size=5):
+    all_keys = set()
+    num_rows = len(df)
+    for i in range(0, num_rows, batch_size):
+        batch = df.iloc[i:i+batch_size]
+        print(f"\n[DEBUG] Processing batch {i//batch_size + 1}")
+        for _, row in batch.iterrows():
+            key = stable_key(row)
+            print(f"[DEBUG] RAW: {row}, GENERATED KEY: {key}")
+            all_keys.add(key)
+    return all_keys
 
-        # برای debug، توقف قبل از insert
-        if batch_index > 3:  # فقط 3 batch اول بررسی شود
-            print("[INFO] Stopping after 3 batches for debug.", flush=True)
-            break
-
-    return pd.DataFrame(all_rows, columns=['Date','Query','Page','Clicks','Impressions','CTR','Position','unique_key'])
-
-# ---------- MAIN ----------
+# =================================================
+# مثال تست با داده‌های شبیه‌سازی شده
+# =================================================
 if __name__ == "__main__":
-    df = fetch_gsc_data(START_DATE, END_DATE)
-    print("[INFO] DEBUG fetch finished. Showing first 10 rows:", flush=True)
-    print(df.head(10))
+    # اینجا باید df1 و df2 واقعی شما جایگزین شود
+    df1 = pd.DataFrame([
+        {'Query': 'سردخانه', 'Page': 'https://bamtabridsazan.com/product/cold-storage/', 'Date': '2025-08-27'},
+        {'Query': 'طراحی تهویه مطبوع', 'Page': 'https://bamtabridsazan.com/comprehensive-hvac-systems-guide/', 'Date': '2025-06-15'},
+    ])
+    df2 = pd.DataFrame([
+        {'Query': 'سردخانه', 'Page': 'https://bamtabridsazan.com/product/cold-storage/', 'Date': '2025-08-27'},
+        {'Query': 'فروش هواساز صنعتی', 'Page': 'https://bamtabridsazan.com/product/air-conditioning-and-air-handling-unit/', 'Date': '2025-06-15'},
+    ])
+
+    # ۱. پردازش batch-wise
+    print("\n=== Processing Run1 Batches ===")
+    keys_run1 = process_batches(df1, batch_size=5)
+    print("\n=== Processing Run2 Batches ===")
+    keys_run2 = process_batches(df2, batch_size=5)
+
+    # ۲. مقایسه
+    compare_runs(df1, df2)
