@@ -1,7 +1,7 @@
 # =================================================
-# FILE: gsc_to_bq.py
-# REV: 3
-# PURPOSE: Full GSC to BigQuery upload with duplicate-free unique_key logic
+# FILE: gsc_to_bq_rev4_incremental.py
+# REV: 4
+# PURPOSE: Incremental GSC to BigQuery loader with duplicate prevention
 # =================================================
 
 from google.oauth2 import service_account
@@ -14,6 +14,7 @@ import time
 import os
 import json
 import sys
+import argparse
 
 # ---------- CONFIG ----------
 SITE_URL = 'https://bamtabridsazan.com/'
@@ -21,9 +22,18 @@ BQ_PROJECT = 'bamtabridsazan'
 BQ_DATASET = 'seo_reports'
 BQ_TABLE = 'bamtabridsazan__gsc__raw_data'
 ROW_LIMIT = 25000
-START_DATE = (datetime.utcnow() - timedelta(days=480)).strftime('%Y-%m-%d')  # 16 months ago
-END_DATE = (datetime.utcnow() - timedelta(days=1)).strftime('%Y-%m-%d')        # yesterday
 RETRY_DELAY = 60  # seconds in case of timeout
+
+# ---------- ARGUMENT PARSER ----------
+parser = argparse.ArgumentParser(description="GSC to BigQuery Incremental Loader")
+parser.add_argument("--start-date", type=str, help="Start date YYYY-MM-DD for incremental load")
+parser.add_argument("--end-date", type=str, help="End date YYYY-MM-DD")
+parser.add_argument("--debug", action="store_true", help="Enable debug mode (skip BQ insert)")
+args = parser.parse_args()
+
+START_DATE = args.start_date or (datetime.utcnow() - timedelta(days=3)).strftime('%Y-%m-%d')
+END_DATE = args.end_date or datetime.utcnow().strftime('%Y-%m-%d')
+DEBUG_MODE = args.debug
 
 # ---------- CREDENTIALS ----------
 service_account_file = os.environ.get("SERVICE_ACCOUNT_FILE", "gcp-key.json")
@@ -81,7 +91,6 @@ def stable_key(row):
         date = date_raw.strftime("%Y-%m-%d")
     else:
         date = str(date_raw)[:10]
-
     det_tuple = (query, page, date)
     s = "|".join(det_tuple)
     return hashlib.sha256(s.encode('utf-8')).hexdigest()
@@ -98,12 +107,12 @@ def get_existing_keys():
         return set()
 
 # ---------- UPLOAD TO BIGQUERY ----------
-def upload_to_bq(df, debug=False):
+def upload_to_bq(df):
     if df.empty:
         print("[INFO] No new rows to insert.", flush=True)
         return
     df['Date'] = pd.to_datetime(df['Date'])
-    if debug:
+    if DEBUG_MODE:
         print(f"[DEBUG] Debug mode ON: skipping insert of {len(df)} rows to BigQuery")
         return
     try:
@@ -114,7 +123,7 @@ def upload_to_bq(df, debug=False):
         print(f"[ERROR] Failed to insert rows: {e}", flush=True)
 
 # ---------- FETCH GSC DATA ----------
-def fetch_gsc_data(start_date, end_date, debug=False):
+def fetch_gsc_data(start_date, end_date):
     all_rows = []
     start_row = 0
     existing_keys = get_existing_keys()
@@ -141,40 +150,40 @@ def fetch_gsc_data(start_date, end_date, debug=False):
             print("[INFO] No more rows returned from GSC.", flush=True)
             break
 
-        new_rows_in_batch = []
+        batch_count = 0
+        batch_new_rows = []
         for r in rows:
-            date, query_text, page = r['keys']
+            date = r['keys'][0]
+            query_text = r['keys'][1]
+            page = r['keys'][2]
             clicks = r.get('clicks',0)
             impressions = r.get('impressions',0)
             ctr = r.get('ctr',0)
             position = r.get('position',0)
-            key = stable_key({'Query': query_text,'Page': page,'Date': date})
+            key = stable_key({
+                'Query': query_text,
+                'Page': page,
+                'Date': date
+            })
             if key not in existing_keys:
                 existing_keys.add(key)
-                new_rows_in_batch.append([date, query_text, page, clicks, impressions, ctr, position, key])
+                batch_new_rows.append([date, query_text, page, clicks, impressions, ctr, position, key])
+                batch_count += 1
 
-        print(f"[INFO] Batch {batch_index}: Fetched {len(rows)} rows, {len(new_rows_in_batch)} new rows.", flush=True)
+        print(f"[INFO] Batch {batch_index}: Fetched {len(rows)} rows, {batch_count} new rows.", flush=True)
+        if batch_new_rows:
+            df_batch = pd.DataFrame(batch_new_rows, columns=['Date','Query','Page','Clicks','Impressions','CTR','Position','unique_key'])
+            upload_to_bq(df_batch)
 
-        if new_rows_in_batch:
-            df_batch = pd.DataFrame(
-                new_rows_in_batch,
-                columns=['Date','Query','Page','Clicks','Impressions','CTR','Position','unique_key']
-            )
-            upload_to_bq(df_batch, debug=debug)
-            all_rows.extend(new_rows_in_batch)
-        else:
-            print(f"[INFO] Batch {batch_index} has no new rows.", flush=True)
-
+        batch_index += 1
         if len(rows) < ROW_LIMIT:
             break
         start_row += len(rows)
-        batch_index += 1
 
     return pd.DataFrame(all_rows, columns=['Date','Query','Page','Clicks','Impressions','CTR','Position','unique_key'])
 
 # ---------- MAIN ----------
 if __name__ == "__main__":
-    debug_flag = '--debug' in sys.argv
     ensure_table()
-    df = fetch_gsc_data(START_DATE, END_DATE, debug=debug_flag)
+    df = fetch_gsc_data(START_DATE, END_DATE)
     print(f"[INFO] Finished fetching all data. Total new rows: {len(df)}", flush=True)
