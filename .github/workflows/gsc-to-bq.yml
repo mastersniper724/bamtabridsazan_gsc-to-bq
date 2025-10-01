@@ -1,44 +1,48 @@
-name: GSC to BigQuery - Incremental Daily Sync
+name: GSC to BigQuery (Incremental Daily)
 
 on:
-  workflow_dispatch:  # اجرای دستی
   schedule:
-    - cron: "0 3 * * *"  # هر روز ساعت 03:00 UTC (6:30 صبح ایران)
+    - cron: "0 3 * * *"
+  workflow_dispatch:
 
 jobs:
   sync-gsc-to-bq:
     runs-on: ubuntu-latest
 
     steps:
-      - name: 📥 Checkout repository
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: 🔧 Set up Python
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - name: 📦 Install dependencies
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install google-cloud-bigquery google-auth google-auth-oauthlib google-auth-httplib2 google-api-python-client pandas pyarrow db-dtypes
+          pip install google-auth google-auth-oauthlib google-auth-httplib2 google-api-python-client google-cloud-bigquery tqdm pandas pyarrow db-dtypes
 
-      - name: 🔑 Write GCP credentials
+      - name: Write GCP credentials file
         run: |
           if [ -n "${{ secrets.BAMTABRIDSAZAN_GCP_SA_KEY_BASE64 }}" ]; then
-            echo "${{ secrets.BAMTABRIDSAZAN_GCP_SA_KEY_BASE64 }}" | base64 --decode > gcp-key.json
+            printf "%s" "${{ secrets.BAMTABRIDSAZAN_GCP_SA_KEY_BASE64 }}" | base64 --decode > gcp-key.json
             echo "✅ WROTE: gcp-key.json from BAMTABRIDSAZAN_GCP_SA_KEY_BASE64"
-            echo "gcp-key.json size: $(wc -c < gcp-key.json)"
+          elif [ -n "${{ secrets.BAMTABRIDSAZAN_GCP_SA_KEY }}" ]; then
+            printf "%s" "${{ secrets.BAMTABRIDSAZAN_GCP_SA_KEY }}" > gcp-key.json
+            echo "✅ WROTE: gcp-key.json from BAMTABRIDSAZAN_GCP_SA_KEY (raw)"
           else
-            echo "❌ ERROR: Missing secret 'BAMTABRIDSAZAN_GCP_SA_KEY_BASE64'"
+            echo "❌ ERROR: Missing GCP credentials secret."
             exit 1
           fi
+          echo "gcp-key.json size:" $(wc -c < gcp-key.json)
 
-      - name: ✅ Validate credentials file
-        run: |
-          python -c "import json; json.load(open('gcp-key.json')); print('✅ gcp-key.json is valid')"
+      - name: Validate gcp-key.json
+        run: python -c "import json; json.load(open('gcp-key.json')); print('✅ gcp-key.json is valid')"
 
-      - name: 🚀 Running incremental GSC sync...
+      - name: Run GSC → BigQuery Incremental Sync
+        env:
+          GOOGLE_APPLICATION_CREDENTIALS: gcp-key.json
         run: |
           echo "🚀 Running incremental GSC sync..."
           python gsc_to_bq.py
