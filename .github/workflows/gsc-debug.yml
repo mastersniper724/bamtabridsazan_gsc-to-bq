@@ -1,0 +1,32 @@
+name: Run GSC Debug Batches
+
+on:
+  workflow_dispatch:  # اجازه اجرا دستی ورک‌فلو
+
+jobs:
+  run-debug:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"  # نسخه پایتون مورد نیاز
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+
+      - name: Run debug Python script
+        run: |
+          python bamtabridsazan_gsc-to-bq/gsc-to-bq-debug-batches.py > output_debug.txt
+
+      - name: Upload debug output
+        uses: actions/upload-artifact@v3
+        with:
+          name: gsc-debug-output
+          path: output_debug.txt
