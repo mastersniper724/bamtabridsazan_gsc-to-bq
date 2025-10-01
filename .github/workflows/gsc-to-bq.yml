@@ -2,9 +2,8 @@ name: GSC to BigQuery (Incremental Daily)
 
 on:
   schedule:
-    # اجرای روزانه ساعت 03:00 UTC
     - cron: "0 3 * * *"
-  workflow_dispatch: # برای اجرای دستی از پنل GitHub Actions
+  workflow_dispatch:
 
 jobs:
   sync-gsc-to-bq:
@@ -22,7 +21,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install google-auth google-auth-oauthlib google-auth-httplib2 google-api-python-client google-cloud-bigquery pandas tqdm
+          pip install google-auth google-auth-oauthlib google-auth-httplib2 google-api-python-client google-cloud-bigquery tqdm pandas
 
       - name: Write GCP credentials file
         run: |
@@ -44,14 +43,6 @@ jobs:
       - name: Run GSC → BigQuery Incremental Sync
         env:
           GOOGLE_APPLICATION_CREDENTIALS: gcp-key.json
-          GSC_SITE_URL: "https://bamtabridsazan.com/"
-          GCP_PROJECT_ID: "bamtabridsazan"
-          BQ_DATASET: "seo_reports"
-          BQ_TABLE: "bamtabridsazan__gsc__raw_data"
         run: |
           echo "🚀 Running incremental GSC sync..."
-          python gsc_to_bq.py \
-            --site-url "$GSC_SITE_URL" \
-            --project-id "$GCP_PROJECT_ID" \
-            --dataset "$BQ_DATASET" \
-            --table "$BQ_TABLE"
+          python gsc_to_bq.py
