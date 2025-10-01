@@ -1,34 +1,38 @@
-import csv
-from gsc_to_bq import fetch_gsc_data  # فرض می‌کنیم فانکشن اصلی همین باشه
-
-# مسیر ذخیره فایل‌ها
-LOG_FILE_1 = "run_debug_batches_1.log"
-LOG_FILE_2 = "run_debug_batches_2.log"
-
-def save_debug_log(filename, batches):
-    with open(filename, "w", newline="", encoding="utf-8") as f:
-        writer = csv.writer(f, delimiter="\t")
-        # Header
-        writer.writerow(["batch_id", "query", "page", "date", "unique_key"])
-        for batch_id, rows in enumerate(batches, start=1):
-            for row in rows:
-                writer.writerow([
-                    batch_id,
-                    row["query"],
-                    row["page"],
-                    row["date"],
-                    row["unique_key"]
-                ])
-    print(f"✅ Debug log saved to {filename}")
+# gsc-to-bq-debug-batches.py
+import sys
+import os
+from gsc_to_bq import fetch_gsc_data, insert_to_bq  # تابع اصلی از فایل gsc_to_bq.py
+import datetime
 
 def main():
-    # Run اول
-    batches_1 = fetch_gsc_data(batch_size=25000, total_batches=3)
-    save_debug_log(LOG_FILE_1, batches_1)
+    # ---------- تنظیمات تست ----------
+    batch_size = 25000
+    total_batches = 3
 
-    # Run دوم
-    batches_2 = fetch_gsc_data(batch_size=25000, total_batches=3)
-    save_debug_log(LOG_FILE_2, batches_2)
+    # تاریخ‌های ثابت برای تست
+    start_date = "2025-09-01"
+    end_date = "2025-09-30"
+
+    print(f"Running debug with {total_batches} batches of size {batch_size}")
+    print(f"Date range: {start_date} to {end_date}")
+
+    all_batches = []
+
+    for i in range(total_batches):
+        print(f"Fetching batch {i+1}...")
+        batch = fetch_gsc_data(start_date=start_date, end_date=end_date)
+        print(f"Fetched {len(batch)} rows in batch {i+1}")
+        all_batches.extend(batch)
+
+    print(f"Total rows fetched: {len(all_batches)}")
+
+    # فقط لاگ، بدون اینکه داده‌ها به BQ ارسال بشه
+    debug_file = "output_debug.txt"
+    with open(debug_file, "w") as f:
+        for row in all_batches:
+            f.write(str(row) + "\n")
+
+    print(f"Debug output saved to {debug_file}")
 
 if __name__ == "__main__":
     main()
