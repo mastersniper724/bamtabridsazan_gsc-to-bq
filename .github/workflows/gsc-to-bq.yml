@@ -1,9 +1,9 @@
-name: 🚀 GSC to BigQuery - Incremental Daily Sync
+name: GSC to BigQuery - Incremental Daily Sync
 
 on:
   workflow_dispatch:  # اجرای دستی
   schedule:
-    - cron: "0 3 * * *"  # هر روز ساعت 03:00 UTC (مثلاً 6:30 صبح ایران)
+    - cron: "0 3 * * *"  # هر روز ساعت 03:00 UTC (6:30 صبح ایران)
 
 jobs:
   sync-gsc-to-bq:
@@ -24,11 +24,15 @@ jobs:
           pip install google-cloud-bigquery google-auth google-auth-oauthlib google-auth-httplib2 google-api-python-client pandas pyarrow db-dtypes
 
       - name: 🔑 Write GCP credentials
-        if: ${{ secrets.BAMTABRIDSAZAN_GCP_SA_KEY_BASE64 != '' }}
         run: |
-          echo "WROTE: gcp-key.json from BAMTABRIDSAZAN_GCP_SA_KEY_BASE64"
-          echo "${{ secrets.BAMTABRIDSAZAN_GCP_SA_KEY_BASE64 }}" | base64 --decode > gcp-key.json
-          echo "gcp-key.json size: $(wc -c < gcp-key.json)"
+          if [ -n "${{ secrets.BAMTABRIDSAZAN_GCP_SA_KEY_BASE64 }}" ]; then
+            echo "${{ secrets.BAMTABRIDSAZAN_GCP_SA_KEY_BASE64 }}" | base64 --decode > gcp-key.json
+            echo "✅ WROTE: gcp-key.json from BAMTABRIDSAZAN_GCP_SA_KEY_BASE64"
+            echo "gcp-key.json size: $(wc -c < gcp-key.json)"
+          else
+            echo "❌ ERROR: Missing secret 'BAMTABRIDSAZAN_GCP_SA_KEY_BASE64'"
+            exit 1
+          fi
 
       - name: ✅ Validate credentials file
         run: |
