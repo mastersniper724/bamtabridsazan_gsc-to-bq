@@ -1,9 +1,8 @@
-name: GSC to BigQuery (final-safe)
+name: GSC to BigQuery (branch-debug-safe)
 
 on:
-  workflow_dispatch:
-  schedule:
-    - cron: '30 22 * * *'  # 02:00 Tehran ≈ 22:30 UTC day before
+  workflow_dispatch:  # اجرا دستی
+  # برای برنچ دیباگ، هیچ schedule‌ای نذاریم تا از main جدا باشه
 
 jobs:
   run-gsc:
@@ -27,21 +26,32 @@ jobs:
         shell: bash
         run: |
           if [ -n "${{ secrets.BAMTABRIDSAZAN_GCP_SA_KEY_BASE64 }}" ]; then
-            printf "%s" "${{ secrets.BAMTABRIDSAZAN_GCP_SA_KEY_BASE64 }}" | base64 --decode > gcp-key.json || { echo "ERROR: base64 decode failed"; exit 1; }
+            printf "%s" "${{ secrets.BAMTABRIDSAZAN_GCP_SA_KEY_BASE64 }}" | base64 --decode > gcp-key.json
             echo "WROTE: gcp-key.json from BAMTABRIDSAZAN_GCP_SA_KEY_BASE64"
-          elif [ -n "${{ secrets.BAMTABRIDSAZAN_GCP_SA_KEY }}" ]; then
-            printf "%s" "${{ secrets.BAMTABRIDSAZAN_GCP_SA_KEY }}" > gcp-key.json
-            echo "WROTE: gcp-key.json from BAMTABRIDSAZAN_GCP_SA_KEY (raw)"
           else
-            echo "ERROR: No secret found. Please set BAMTABRIDSAZAN_GCP_SA_KEY_BASE64 or BAMTABRIDSAZAN_GCP_SA_KEY"
-            exit 1
+            if [ -n "${{ secrets.BAMTABRIDSAZAN_GCP_SA_KEY }}" ]; then
+              printf "%s" "${{ secrets.BAMTABRIDSAZAN_GCP_SA_KEY }}" > gcp-key.json
+              echo "WROTE: gcp-key.json from BAMTABRIDSAZAN_GCP_SA_KEY (raw)"
+            else
+              echo "ERROR: No secret found. Create BAMTABRIDSAZAN_GCP_SA_KEY_BASE64 or BAMTABRIDSAZAN_GCP_SA_KEY"
+              exit 1
+            fi
           fi
           echo "gcp-key.json size:" $(wc -c < gcp-key.json)
 
       - name: Validate JSON
-        run: python -c "import json; json.load(open('gcp-key.json')); print('✅ gcp-key.json is valid')"
+        run: python -c "import json,sys; json.load(open('gcp-key.json')); print('✅ gcp-key.json is valid')"
 
-      - name: Run GSC to BQ
+      # ✅ مرحله اجرای اسکریپت، فقط روی main دیتابیس آپدیت شود
+      - name: Run gsc_to_bq
+        if: github.ref == 'refs/heads/main'  # 🔹 فقط main
         env:
           SERVICE_ACCOUNT_FILE: gcp-key.json
         run: python gsc_to_bq.py
+
+      # ✅ مرحله لاگ و تست، روی هر برنچ اجرا شود
+      - name: Run gsc_to_bq (debug/log only)
+        if: github.ref != 'refs/heads/main'  # 🔹 روی همه شاخه‌های دیگه
+        env:
+          SERVICE_ACCOUNT_FILE: gcp-key.json
+        run: python gsc_to_bq.py --debug
