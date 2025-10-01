@@ -66,11 +66,32 @@ def ensure_table():
 
 # ---------- HELPER: create unique key ----------
 def stable_key(row):
-    s = "|".join([
-        row.get('Query','') or '',
-        row.get('Page','') or '',
-        str(row.get('Date',''))
-    ])
+    """
+    تولید unique_key کاملاً deterministic برای هر رکورد
+    با استفاده از فیلدهای Query, Page, Date
+    ضد duplicate حتی در workflow های re-run
+    """
+    # ۱. Normalize Query
+    query = (row.get('Query') or '').strip().lower()
+    
+    # ۲. Normalize Page / URL
+    page = (row.get('Page') or '').strip().lower().rstrip('/')  # حذف trailing slash
+    
+    # ۳. Normalize Date به YYYY-MM-DD
+    date_raw = row.get('Date')
+    date = ''
+    if isinstance(date_raw, str):
+        # اگر رشته باشه، فقط yyyy-mm-dd رو جدا کن
+        date = date_raw[:10]
+    else:
+        try:
+            # اگر datetime باشه، فرمت YYYY-MM-DD
+            date = date_raw.strftime("%Y-%m-%d")
+        except:
+            date = str(date_raw)[:10]
+    
+    # ۴. Join نهایی و هش
+    s = f"{query}|{page}|{date}"
     return hashlib.sha256(s.encode('utf-8')).hexdigest()
 
 # ---------- FETCH EXISTING KEYS FROM BIGQUERY ----------
