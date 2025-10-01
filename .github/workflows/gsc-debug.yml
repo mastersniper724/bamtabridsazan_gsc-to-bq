@@ -28,7 +28,9 @@ jobs:
 
       - name: Run debug Python script
         run: |
-          python bamtabridsazan_gsc-to-bq/gsc-to-bq-debug-batches.py > output_debug.txt
+          cd bamtabridsazan_gsc-to-bq
+          python gsc-to-bq-debug-batches.py > ../output_debug.txt
+
 
       - name: Upload debug output
         uses: actions/upload-artifact@v4
