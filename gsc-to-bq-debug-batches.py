@@ -1,5 +1,5 @@
 import csv
-from gsc_to_bq import fetch_batches  # فرض می‌کنیم فانکشن اصلی همین باشه
+from gsc-to-bq import fetch_batches  # فرض می‌کنیم فانکشن اصلی همین باشه
 
 # مسیر ذخیره فایل‌ها
 LOG_FILE_1 = "run_debug_batches_1.log"
