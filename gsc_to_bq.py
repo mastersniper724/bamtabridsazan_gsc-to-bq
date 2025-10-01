@@ -186,4 +186,16 @@ def fetch_gsc_data(start_date, end_date):
 if __name__ == "__main__":
     ensure_table()
     df = fetch_gsc_data(START_DATE, END_DATE)
-    print(f"[INFO] Finished fetching all data. Total new rows: {len(df)}", flush=True)
+    
+    total_new_rows = 0  # شمارندهٔ ردیف‌های جدید واقعی
+    
+    # فرض می‌کنیم تابع insert_rows_to_bigquery(new_rows) در جایی اجرا می‌شه
+    # برای مثال:
+    for batch in get_batches(df):
+        new_rows = get_new_rows(batch)  # فقط ردیف‌های جدید
+        if new_rows:
+            insert_rows_to_bigquery(new_rows)
+            total_new_rows += len(new_rows)
+            print(f"[INFO] Inserted {len(new_rows)} rows to BigQuery.", flush=True)
+    
+    print(f"[INFO] Finished fetching all data. Total new rows: {total_new_rows}", flush=True)
