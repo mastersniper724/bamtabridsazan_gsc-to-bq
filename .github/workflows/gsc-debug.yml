@@ -22,7 +22,7 @@ jobs:
           # نصب dependencies اصلی
           if [ -f bamtabridsazan_gsc-to-bq/requirements.txt ]; then pip install -r bamtabridsazan_gsc-to-bq/requirements.txt; fi
           # اطمینان از نصب کتابخانه های گوگل
-          pip install pandas google-auth google-cloud-bigquery
+          pip install pandas google-auth google-cloud-bigquery google-api-python-client google-auth-httplib2
 
       # ✅ ساخت فایل gcp-key.json از سکرت Base64
       - name: Decode GCP Key from Base64
