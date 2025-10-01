@@ -1,21 +1,26 @@
-name: GSC to BigQuery (branch-debug-safe)
+name: GSC to BigQuery (Debug Safe)
 
 on:
-  workflow_dispatch:  # اجرا دستی
-  # برای برنچ دیباگ، هیچ schedule‌ای نذاریم تا از main جدا باشه
+  workflow_dispatch:
+    inputs:
+      debug:
+        description: 'Run in debug mode (no insert to BigQuery)'
+        required: false
+        default: 'true'
+  # اینجا می‌توانیم schedule هم اضافه کنیم در صورت نیاز، فعلاً فقط manual
 
 jobs:
-  run-gsc:
+  run-gsc-debug:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.10'
+          python-version: '3.11'
 
       - name: Install dependencies
         run: |
@@ -28,30 +33,31 @@ jobs:
           if [ -n "${{ secrets.BAMTABRIDSAZAN_GCP_SA_KEY_BASE64 }}" ]; then
             printf "%s" "${{ secrets.BAMTABRIDSAZAN_GCP_SA_KEY_BASE64 }}" | base64 --decode > gcp-key.json
             echo "WROTE: gcp-key.json from BAMTABRIDSAZAN_GCP_SA_KEY_BASE64"
+          elif [ -n "${{ secrets.BAMTABRIDSAZAN_GCP_SA_KEY }}" ]; then
+            printf "%s" "${{ secrets.BAMTABRIDSAZAN_GCP_SA_KEY }}" > gcp-key.json
+            echo "WROTE: gcp-key.json from BAMTABRIDSAZAN_GCP_SA_KEY (raw)"
           else
-            if [ -n "${{ secrets.BAMTABRIDSAZAN_GCP_SA_KEY }}" ]; then
-              printf "%s" "${{ secrets.BAMTABRIDSAZAN_GCP_SA_KEY }}" > gcp-key.json
-              echo "WROTE: gcp-key.json from BAMTABRIDSAZAN_GCP_SA_KEY (raw)"
-            else
-              echo "ERROR: No secret found. Create BAMTABRIDSAZAN_GCP_SA_KEY_BASE64 or BAMTABRIDSAZAN_GCP_SA_KEY"
-              exit 1
-            fi
+            echo "ERROR: No secret found."
+            exit 1
           fi
           echo "gcp-key.json size:" $(wc -c < gcp-key.json)
 
       - name: Validate JSON
-        run: python -c "import json,sys; json.load(open('gcp-key.json')); print('✅ gcp-key.json is valid')"
+        run: python -c "import json; json.load(open('gcp-key.json')); print('✅ gcp-key.json is valid')"
 
-      # ✅ مرحله اجرای اسکریپت، فقط روی main دیتابیس آپدیت شود
-      - name: Run gsc_to_bq
-        if: github.ref == 'refs/heads/main'  # 🔹 فقط main
+      - name: Run gsc_to_bq in debug mode
         env:
           SERVICE_ACCOUNT_FILE: gcp-key.json
-        run: python gsc_to_bq.py
+        run: |
+          DEBUG_FLAG=""
+          if [ "${{ github.event.inputs.debug }}" == "true" ]; then
+            DEBUG_FLAG="--debug"
+          fi
+          echo "Running gsc_to_bq.py with debug flag: $DEBUG_FLAG"
+          python gsc_to_bq.py $DEBUG_FLAG > output_debug.txt 2>&1 || echo "Script failed with exit code $?"
 
-      # ✅ مرحله لاگ و تست، روی هر برنچ اجرا شود
-      - name: Run gsc_to_bq (debug/log only)
-        if: github.ref != 'refs/heads/main'  # 🔹 روی همه شاخه‌های دیگه
-        env:
-          SERVICE_ACCOUNT_FILE: gcp-key.json
-        run: python gsc_to_bq.py --debug
+      - name: Upload debug log
+        uses: actions/upload-artifact@v4
+        with:
+          name: gsc-debug-output
+          path: output_debug.txt
