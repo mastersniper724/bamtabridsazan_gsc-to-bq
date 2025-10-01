@@ -13,7 +13,7 @@ import sys
 SITE_URL = 'https://bamtabridsazan.com/'
 BQ_PROJECT = 'bamtabridsazan'
 BQ_DATASET = 'seo_reports'
-BQ_TABLE = 'raw_gsc_data'
+BQ_TABLE = 'bamtabridsazan__gsc__raw_data'
 ROW_LIMIT = 25000
 START_DATE = (datetime.utcnow() - timedelta(days=480)).strftime('%Y-%m-%d') # 16 months ago
 END_DATE = (datetime.utcnow() - timedelta(days=1)).strftime('%Y-%m-%d')      # yesterday
