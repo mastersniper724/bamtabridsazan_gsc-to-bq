@@ -1,7 +1,7 @@
 name: Run GSC Debug Batches
 
 on:
-  workflow_dispatch:  # اجازه اجرا دستی ورک‌فلو
+  workflow_dispatch:
 
 jobs:
   run-debug:
@@ -16,23 +16,54 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install dependencies
+      - name: List repo files (debug)
         run: |
-          python -m pip install --upgrade pip
-          if [ -f bamtabridsazan_gsc-to-bq/requirements.txt ]; then pip install -r bamtabridsazan_gsc-to-bq/requirements.txt; fi
+          echo "GITHUB_WORKSPACE: $GITHUB_WORKSPACE"
+          pwd
+          echo "Top-level files:"
+          ls -la
+          echo "Listing (maxdepth 3):"
+          find . -maxdepth 3 -type f -print | sed -n '1,200p'
 
-      - name: List repo files for debug
+      - name: Find debug script (gsc-to-bq-debug-batches.py)
+        id: findscript
+        shell: bash
         run: |
-          echo "Listing repo files to check paths..."
-          ls -R
+          SCRIPT_PATH=$(find . -type f -name "gsc-to-bq-debug-batches.py" | head -n 1 || true)
+          if [ -z "$SCRIPT_PATH" ]; then
+            echo "ERROR: gsc-to-bq-debug-batches.py not found in repository." >&2
+            exit 1
+          fi
+          SCRIPT_DIR=$(dirname "$SCRIPT_PATH")
+          echo "Found script: $SCRIPT_PATH"
+          echo "dir=$SCRIPT_DIR" >> $GITHUB_OUTPUT
+          echo "found=$SCRIPT_PATH" >> $GITHUB_OUTPUT
 
-      - name: Run debug Python script
+      - name: Install dependencies (if requirements near the script or repo root)
         run: |
-          cd bamtabridsazan_gsc-to-bq
-          python gsc-to-bq-debug-batches.py > ../output_debug.txt
+          set -e
+          # try requirements next to the script first
+          if [ -n "${{ steps.findscript.outputs.dir }}" ] && [ -f "${{ steps.findscript.outputs.dir }}/requirements.txt" ]; then
+            echo "Installing requirements from ${{ steps.findscript.outputs.dir }}/requirements.txt"
+            python -m pip install --upgrade pip
+            pip install -r "${{ steps.findscript.outputs.dir }}/requirements.txt"
+          elif [ -f requirements.txt ]; then
+            echo "Installing requirements from repository root requirements.txt"
+            python -m pip install --upgrade pip
+            pip install -r requirements.txt
+          else
+            echo "No requirements.txt found near script or repo root. Skipping pip install."
+          fi
 
+      - name: Run debug Python script (capture output)
+        run: |
+          echo "Running script: ${{ steps.findscript.outputs.found }}"
+          python "${{ steps.findscript.outputs.found }}" > output_debug.txt 2>&1 || RC=$?
+          echo "Script exit code: ${RC:-0}"
+          echo "First 200 lines of output_debug.txt:"
+          sed -n '1,200p' output_debug.txt || true
 
-      - name: Upload debug output
+      - name: Upload debug output (artifact)
         uses: actions/upload-artifact@v4
         with:
           name: gsc-debug-output
