@@ -1,57 +1,58 @@
-name: GSC to BigQuery (Incremental Daily)
+name: Run GSC Debug Batches
 
 on:
-  schedule:
-    # اجرای روزانه ساعت 03:00 UTC
-    - cron: "0 3 * * *"
-  workflow_dispatch: # برای اجرای دستی از پنل GitHub Actions
+  workflow_dispatch:  # اجرا دستی
 
 jobs:
-  sync-gsc-to-bq:
+  run-debug:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
+      - name: Checkout repo
         uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v4
         with:
           python-version: "3.11"
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install google-auth google-auth-oauthlib google-auth-httplib2 google-api-python-client google-cloud-bigquery tqdm
+          # نصب dependencies اصلی
+          if [ -f bamtabridsazan_gsc-to-bq/requirements.txt ]; then pip install -r bamtabridsazan_gsc-to-bq/requirements.txt; fi
+          # اطمینان از نصب کتابخانه های گوگل
+          pip install pandas google-auth google-cloud-bigquery google-api-python-client google-auth-httplib2
+          # رفع ارورهای انتهای فایل output
+          pip install db-dtypes pyarrow
 
-      - name: Write GCP credentials file
+      # ✅ ساخت فایل gcp-key.json از سکرت Base64
+      - name: Decode GCP Key from Base64
         run: |
-          if [ -n "${{ secrets.BAMTABRIDSAZAN_GCP_SA_KEY_BASE64 }}" ]; then
-            printf "%s" "${{ secrets.BAMTABRIDSAZAN_GCP_SA_KEY_BASE64 }}" | base64 --decode > gcp-key.json
-            echo "✅ WROTE: gcp-key.json from BAMTABRIDSAZAN_GCP_SA_KEY_BASE64"
-          elif [ -n "${{ secrets.BAMTABRIDSAZAN_GCP_SA_KEY }}" ]; then
-            printf "%s" "${{ secrets.BAMTABRIDSAZAN_GCP_SA_KEY }}" > gcp-key.json
-            echo "✅ WROTE: gcp-key.json from BAMTABRIDSAZAN_GCP_SA_KEY (raw)"
-          else
-            echo "❌ ERROR: Missing GCP credentials secret."
-            exit 1
-          fi
-          echo "gcp-key.json size:" $(wc -c < gcp-key.json)
-
-      - name: Validate gcp-key.json
-        run: python -c "import json; json.load(open('gcp-key.json')); print('✅ gcp-key.json is valid')"
-
-      - name: Run GSC → BigQuery Incremental Sync
+          echo "$BAMTABRIDSAZAN_GCP_SA_KEY_BASE64" | base64 --decode > gcp-key.json
         env:
-          GOOGLE_APPLICATION_CREDENTIALS: gcp-key.json
-          GSC_SITE_URL: "https://bamtabridsazan.com/"
-          GCP_PROJECT_ID: "bamtabridsazan"
-          BQ_DATASET: "seo_reports"
-          BQ_TABLE: "bamtabridsazan__gsc__raw_data"
+          BAMTABRIDSAZAN_GCP_SA_KEY_BASE64: ${{ secrets.BAMTABRIDSAZAN_GCP_SA_KEY_BASE64 }}
+
+      - name: Run debug Python script
         run: |
-          echo "🚀 Running incremental GSC sync..."
-          python gsc_to_bq.py \
-            --site-url "$GSC_SITE_URL" \
-            --project-id "$GCP_PROJECT_ID" \
-            --dataset "$BQ_DATASET" \
-            --table "$BQ_TABLE"
+          echo "Running script: ./gsc-to-bq-debug-batches.py"
+          python ./gsc-to-bq-debug-batches.py > output_debug.txt || echo "Script failed with exit code $?"
+
+      # ✅ آپلود artifact های دیباگ
+      - name: Upload debug output TXT
+        uses: actions/upload-artifact@v4
+        with:
+          name: gsc-debug-output-txt
+          path: output_debug.txt
+
+      - name: Upload debug CSV with unique_key_new
+        uses: actions/upload-artifact@v4
+        with:
+          name: gsc-debug-output-csv
+          path: output_debug.csv
+
+      - name: Upload duplicates report
+        uses: actions/upload-artifact@v4
+        with:
+          name: gsc-debug-duplicates
+          path: duplicates_report.csv
