@@ -18,19 +18,24 @@ def main():
 
     all_batches = []
 
-    for i in range(total_batches):
-        print(f"Fetching batch {i+1}...")
-        batch = fetch_gsc_data(start_date=start_date, end_date=end_date)
-        print(f"Fetched {len(batch)} rows in batch {i+1}")
-        all_batches.extend(batch)
-
-    print(f"Total rows fetched: {len(all_batches)}")
-
-    # فقط لاگ، بدون اینکه داده‌ها به BQ ارسال بشه
     debug_file = "output_debug.txt"
-    with open(debug_file, "w") as f:
-        for row in all_batches:
-            f.write(str(row) + "\n")
+    # باز کردن فایل لاگ برای نوشتن داده‌های واقعی
+    with open(debug_file, "w", encoding="utf-8") as f:
+
+        for i in range(total_batches):
+            print(f"Fetching batch {i+1}...")
+            batch = fetch_gsc_data(start_date=start_date, end_date=end_date)  # خط اصلاح‌شده
+            print(f"Fetched {len(batch)} rows in batch {i+1}")
+            
+            all_batches.extend(batch)
+
+            # ذخیره ردیف‌ها در فایل لاگ
+            for row in batch:
+                f.write(str(row) + "\n")
+
+        # جمع کل ردیف‌ها
+        print(f"Total rows fetched: {len(all_batches)}")
+        f.write(f"\nTotal rows fetched: {len(all_batches)}\n")
 
     print(f"Debug output saved to {debug_file}")
 
