@@ -79,17 +79,15 @@ def stable_key(row):
     
     # ۳. Normalize Date به YYYY-MM-DD
     date_raw = row.get('Date')
-    date = ''
     if isinstance(date_raw, str):
         # اگر رشته باشه، فقط yyyy-mm-dd رو جدا کن
-        date = date_raw[:10]
+        date = date_raw[:10]  # فقط yyyy-mm-dd
+    elif isinstance(date_raw, datetime):
+        # اگر datetime باشه، فرمت YYYY-MM-DD
+        date = date_raw.strftime("%Y-%m-%d")
     else:
-        try:
-            # اگر datetime باشه، فرمت YYYY-MM-DD
-            date = date_raw.strftime("%Y-%m-%d")
-        except:
-            date = str(date_raw)[:10]
-    
+        date = str(date_raw)[:10]  # fallback
+
     # ۴. Join نهایی و هش
     s = f"{query}|{page}|{date}"
     return hashlib.sha256(s.encode('utf-8')).hexdigest()
