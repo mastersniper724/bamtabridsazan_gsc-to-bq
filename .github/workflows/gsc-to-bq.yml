@@ -44,7 +44,7 @@ jobs:
       - name: Validate JSON (single-line python, no heredoc)
         run: python -c "import json,sys; json.load(open('gcp-key.json')); print('✅ gcp-key.json is valid')"
 
-      - name: Run gsc-to-bq
+      - name: Run gsc_to_bq
         env:
           SERVICE_ACCOUNT_FILE: gcp-key.json
-        run: python gsc-to-bq.py
+        run: python gsc_to_bq.py
