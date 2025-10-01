@@ -88,8 +88,11 @@ def stable_key(row):
     else:
         date = str(date_raw)[:10]  # fallback
 
-    # ۴. Join نهایی و هش
-    s = f"{query}|{page}|{date}"
+    # ۴. بساز یک tuple deterministic از فیلدهای normalized
+    det_tuple = (query, page, date)
+
+    # ۵. Join و هش
+    s = "|".join(det_tuple)
     return hashlib.sha256(s.encode('utf-8')).hexdigest()
 
 # ---------- FETCH EXISTING KEYS FROM BIGQUERY ----------
