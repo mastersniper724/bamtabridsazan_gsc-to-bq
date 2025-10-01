@@ -25,11 +25,16 @@ def main():
         for i in range(total_batches):
             print(f"Fetching batch {i+1}...")
             batch = fetch_gsc_data(start_date=start_date, end_date=end_date)
-            print(f"Fetched {len(batch)} rows in batch {i+1}")
+            print(f"Batch {i+1} type: {type(batch)}, length: {len(batch)}")
 
             # اگر batch شامل رشته است (مثل لیست repr شده دیکشنری‌ها)
             if isinstance(batch, list) and all(isinstance(r, str) for r in batch):
                 batch = [ast.literal_eval(r) for r in batch]
+
+            # اگر batch هنوز خالی است، هشدار بدهیم و رد کنیم
+            if not batch:
+                print(f"Warning: Batch {i+1} is empty, skipping")
+                continue
 
             # تبدیل به DataFrame و اضافه کردن batch_id
             df_batch = pd.DataFrame(batch)
@@ -40,6 +45,11 @@ def main():
             # نوشتن log
             for row in batch:
                 f.write(str(row) + "\n")
+
+        if not all_batches:
+            print("Warning: No data fetched in any batch! Exiting debug script.")
+            f.write("Warning: No data fetched in any batch!\n")
+            return
 
         # جمع کل ردیف‌ها
         df_all = pd.concat(all_batches, ignore_index=True)
