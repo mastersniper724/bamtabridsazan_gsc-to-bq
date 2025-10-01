@@ -1,6 +1,10 @@
+# ==================================================
+# REVISION: rev.0-debug
+# فایل تست برای بررسی مراحل داده GSC و تولید stable_key
+# ==================================================
+
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
-from google.cloud import bigquery
 import pandas as pd
 from datetime import datetime, timedelta
 import hashlib
@@ -11,13 +15,10 @@ import sys
 
 # ---------- CONFIG ----------
 SITE_URL = 'https://bamtabridsazan.com/'
-BQ_PROJECT = 'bamtabridsazan'
-BQ_DATASET = 'seo_reports'
-BQ_TABLE = 'bamtabridsazan__gsc__raw_data'
 ROW_LIMIT = 25000
-START_DATE = (datetime.utcnow() - timedelta(days=480)).strftime('%Y-%m-%d') # 16 months ago
-END_DATE = (datetime.utcnow() - timedelta(days=1)).strftime('%Y-%m-%d')      # yesterday
-RETRY_DELAY = 60  # seconds in case of timeout
+START_DATE = (datetime.utcnow() - timedelta(days=480)).strftime('%Y-%m-%d')  # 16 months ago
+END_DATE = (datetime.utcnow() - timedelta(days=1)).strftime('%Y-%m-%d')       # yesterday
+RETRY_DELAY = 60  # seconds
 
 # ---------- CREDENTIALS ----------
 service_account_file = os.environ.get("SERVICE_ACCOUNT_FILE", "gcp-key.json")
@@ -38,39 +39,8 @@ except Exception as e:
     print("Error details:", e)
     sys.exit(1)
 
-# ---------- BIGQUERY CLIENT ----------
-bq_client = bigquery.Client(credentials=credentials, project=credentials.project_id)
-table_ref = bq_client.dataset(BQ_DATASET).table(BQ_TABLE)
-
-# ---------- ENSURE TABLE EXISTS ----------
-def ensure_table():
-    try:
-        bq_client.get_table(table_ref)
-        print(f"[INFO] Table {BQ_TABLE} exists.", flush=True)
-    except:
-        print(f"[INFO] Table {BQ_TABLE} not found. Creating...", flush=True)
-        schema = [
-            bigquery.SchemaField("Date", "DATE"),
-            bigquery.SchemaField("Query", "STRING"),
-            bigquery.SchemaField("Page", "STRING"),
-            bigquery.SchemaField("Clicks", "INTEGER"),
-            bigquery.SchemaField("Impressions", "INTEGER"),
-            bigquery.SchemaField("CTR", "FLOAT"),
-            bigquery.SchemaField("Position", "FLOAT"),
-            bigquery.SchemaField("unique_key", "STRING"),
-        ]
-        table = bigquery.Table(table_ref, schema=schema)
-        table.clustering_fields = ["Date", "Query"]  # ← اضافه شد
-        bq_client.create_table(table)
-        print(f"[INFO] Table {BQ_TABLE} created.", flush=True)
-
-# ---------- HELPER: create unique key ----------
+# ---------- HELPER: create deterministic unique key ----------
 def stable_key(row):
-    """
-    تولید unique_key کاملاً deterministic برای هر رکورد
-    با استفاده از فیلدهای Query, Page, Date
-    ضد duplicate حتی در workflow های re-run
-    """
     # ۱. Normalize Query
     query = (row.get('Query') or '').strip().lower()
     
@@ -80,51 +50,29 @@ def stable_key(row):
     # ۳. Normalize Date به YYYY-MM-DD
     date_raw = row.get('Date')
     if isinstance(date_raw, str):
-        # اگر رشته باشه، فقط yyyy-mm-dd رو جدا کن
         date = date_raw[:10]  # فقط yyyy-mm-dd
     elif isinstance(date_raw, datetime):
-        # اگر datetime باشه، فرمت YYYY-MM-DD
         date = date_raw.strftime("%Y-%m-%d")
     else:
         date = str(date_raw)[:10]  # fallback
-
+    
     # ۴. بساز یک tuple deterministic از فیلدهای normalized
     det_tuple = (query, page, date)
-
+    
     # ۵. Join و هش
     s = "|".join(det_tuple)
-    return hashlib.sha256(s.encode('utf-8')).hexdigest()
+    key = hashlib.sha256(s.encode('utf-8')).hexdigest()
+    
+    print(f"[DEBUG] RAW ROW: {row}")
+    print(f"[DEBUG] NORMALIZED: query={query}, page={page}, date={date}")
+    print(f"[DEBUG] GENERATED KEY: {key}")
+    
+    return key
 
-# ---------- FETCH EXISTING KEYS FROM BIGQUERY ----------
-def get_existing_keys():
-    try:
-        query = f"SELECT unique_key FROM `{BQ_PROJECT}.{BQ_DATASET}.{BQ_TABLE}`"
-        df = bq_client.query(query).to_dataframe()
-        print(f"[INFO] Retrieved {len(df)} existing keys from BigQuery.", flush=True)
-        return set(df['unique_key'].astype(str).tolist())
-    except Exception as e:
-        print(f"[WARN] Failed to fetch existing keys: {e}", flush=True)
-        return set()
-
-# ---------- UPLOAD TO BIGQUERY ----------
-def upload_to_bq(df):
-    if df.empty:
-        print("[INFO] No new rows to insert.", flush=True)
-        return
-    # ---------- CONVERT DATE COLUMN ----------
-    df['Date'] = pd.to_datetime(df['Date'])
-    try:
-        job = bq_client.load_table_from_dataframe(df, table_ref)
-        job.result()
-        print(f"[INFO] Inserted {len(df)} rows to BigQuery.", flush=True)
-    except Exception as e:
-        print(f"[ERROR] Failed to insert rows: {e}", flush=True)
-
-# ---------- FETCH GSC DATA ----------
-def fetch_gsc_data(start_date, end_date):
+# ---------- FETCH GSC DATA WITH DEBUG ----------
+def fetch_gsc_data_debug(start_date, end_date):
     all_rows = []
     start_row = 0
-    existing_keys = get_existing_keys()
     batch_index = 1
 
     while True:
@@ -149,7 +97,7 @@ def fetch_gsc_data(start_date, end_date):
             break
 
         batch_count = 0
-        for r in rows:
+        for r in rows[:5]:  # فقط ۵ رکورد اول هر batch برای تست
             date = r['keys'][0]
             query_text = r['keys'][1]
             page = r['keys'][2]
@@ -157,36 +105,43 @@ def fetch_gsc_data(start_date, end_date):
             impressions = r.get('impressions',0)
             ctr = r.get('ctr',0)
             position = r.get('position',0)
+
             key = stable_key({
                 'Query': query_text,
                 'Page': page,
                 'Date': date
             })
-            if key not in existing_keys:
-                existing_keys.add(key)
-                all_rows.append([date, query_text, page, clicks, impressions, ctr, position, key])
-                batch_count += 1
 
-        print(f"[INFO] Batch {batch_index}: Fetched {len(rows)} rows, {batch_count} new rows.", flush=True)
+            all_rows.append({
+                'Date': date,
+                'Query': query_text,
+                'Page': page,
+                'Clicks': clicks,
+                'Impressions': impressions,
+                'CTR': ctr,
+                'Position': position,
+                'unique_key': key
+            })
+            batch_count += 1
+
+        print(f"[INFO] Batch {batch_index}: Fetched {len(rows)} rows, {batch_count} debug rows processed.", flush=True)
         batch_index += 1
-
-        if batch_count > 0:
-            df_batch = pd.DataFrame(
-                all_rows[-batch_count:],  # فقط رکوردهای جدید batch
-                columns=['Date','Query','Page','Clicks','Impressions','CTR','Position','unique_key']
-            )
-            upload_to_bq(df_batch)
-        else:
-            print(f"[INFO] Batch {batch_index} has no new rows.", flush=True)
 
         if len(rows) < ROW_LIMIT:
             break
         start_row += len(rows)
 
-    return pd.DataFrame(all_rows, columns=['Date','Query','Page','Clicks','Impressions','CTR','Position','unique_key'])
+        # توقف بعد از اولین batch برای تست
+        if batch_index > 2:
+            print("[INFO] Stopping after first batch for debug test.", flush=True)
+            break
+
+    df_debug = pd.DataFrame(all_rows)
+    print(f"[INFO] Total debug rows collected: {len(df_debug)}", flush=True)
+    return df_debug
 
 # ---------- MAIN ----------
 if __name__ == "__main__":
-    ensure_table()
-    df = fetch_gsc_data(START_DATE, END_DATE)
-    print(f"[INFO] Finished fetching all data. Total new rows: {len(df)}", flush=True)
+    df_debug = fetch_gsc_data_debug(START_DATE, END_DATE)
+    print("[INFO] DEBUG fetch finished. Showing first 5 rows:")
+    print(df_debug.head())
