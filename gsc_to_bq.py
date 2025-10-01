@@ -1,166 +1,189 @@
-# ==========================================================
-# File: gsc_to_bq.py
-# Rev: 4 (Incremental Mode - Fixed Duplicates & Logs)
-# ==========================================================
+# =================================================
+# FILE: gsc_to_bq_rev4_incremental.py
+# REV: 4
+# PURPOSE: Incremental GSC to BigQuery loader with duplicate prevention
+# =================================================
 
-import os
-import sys
-import json
-import argparse
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
+from google.cloud import bigquery
 import pandas as pd
 from datetime import datetime, timedelta
-from google.cloud import bigquery
-from googleapiclient.discovery import build
-from google.oauth2 import service_account
+import hashlib
+import time
+import os
+import json
+import sys
+import argparse
 
-# ==========================================================
-# 🔧 SITE CONFIGURATION (Fixed Values)
-# ==========================================================
-SITE_URL = "https://bamtabridsazan.com/"
-PROJECT_ID = "bamtabridsazan"
-DATASET_ID = "seo_reports"
-TABLE_ID = "bamtabridsazan__gsc__raw_data"
-KEY_FILE = "gcp-key.json"
+# ---------- CONFIG ----------
+SITE_URL = 'https://bamtabridsazan.com/'
+BQ_PROJECT = 'bamtabridsazan'
+BQ_DATASET = 'seo_reports'
+BQ_TABLE = 'bamtabridsazan__gsc__raw_data'
+ROW_LIMIT = 25000
+RETRY_DELAY = 60  # seconds in case of timeout
 
-# ==========================================================
-# 🔧 INITIALIZATION
-# ==========================================================
-SCOPES = ["https://www.googleapis.com/auth/webmasters.readonly"]
-credentials = service_account.Credentials.from_service_account_file(KEY_FILE, scopes=SCOPES)
-webmasters_service = build("searchconsole", "v1", credentials=credentials)
-bq_client = bigquery.Client(credentials=credentials, project=PROJECT_ID)
-
-print(f"✅ Service Account has access to {SITE_URL}")
-
-# ==========================================================
-# 🧠 ARGUMENT PARSER
-# ==========================================================
-parser = argparse.ArgumentParser(description="Fetch GSC data incrementally and push to BigQuery")
-parser.add_argument("--start-date", required=False, help="Start date (YYYY-MM-DD)")
-parser.add_argument("--end-date", required=False, help="End date (YYYY-MM-DD)")
+# ---------- ARGUMENT PARSER ----------
+parser = argparse.ArgumentParser(description="GSC to BigQuery Incremental Loader")
+parser.add_argument("--start-date", type=str, help="Start date YYYY-MM-DD for incremental load")
+parser.add_argument("--end-date", type=str, help="End date YYYY-MM-DD")
+parser.add_argument("--debug", action="store_true", help="Enable debug mode (skip BQ insert)")
 args = parser.parse_args()
 
-# اگر تاریخ ندادیم، سه روز گذشته تا دیروز رو بگیریم
-end_date = args.end_date or (datetime.utcnow().date() - timedelta(days=1)).isoformat()
-start_date = args.start_date or (datetime.utcnow().date() - timedelta(days=3)).isoformat()
+START_DATE = args.start_date or (datetime.utcnow() - timedelta(days=3)).strftime('%Y-%m-%d')
+END_DATE = args.end_date or datetime.utcnow().strftime('%Y-%m-%d')
+DEBUG_MODE = args.debug
 
-# ==========================================================
-# 🧱 TABLE SCHEMA
-# ==========================================================
-TABLE_REF = f"{PROJECT_ID}.{DATASET_ID}.{TABLE_ID}"
+# ---------- CREDENTIALS ----------
+service_account_file = os.environ.get("SERVICE_ACCOUNT_FILE", "gcp-key.json")
+with open(service_account_file, "r") as f:
+    sa_info = json.load(f)
 
-SCHEMA = [
-    bigquery.SchemaField("site_url", "STRING"),
-    bigquery.SchemaField("date", "DATE"),
-    bigquery.SchemaField("query", "STRING"),
-    bigquery.SchemaField("page", "STRING"),
-    bigquery.SchemaField("country", "STRING"),
-    bigquery.SchemaField("device", "STRING"),
-    bigquery.SchemaField("clicks", "FLOAT"),
-    bigquery.SchemaField("impressions", "FLOAT"),
-    bigquery.SchemaField("ctr", "FLOAT"),
-    bigquery.SchemaField("position", "FLOAT"),
-]
+credentials = service_account.Credentials.from_service_account_info(sa_info)
 
-# ==========================================================
-# ⚙️ TABLE CREATION IF NOT EXISTS
-# ==========================================================
+# Build Search Console service
+service = build('searchconsole', 'v1', credentials=credentials)
+
+# --- Check access ---
+try:
+    response = service.sites().get(siteUrl=SITE_URL).execute()
+    print(f"✅ Service Account has access to {SITE_URL}", flush=True)
+except Exception as e:
+    print(f"❌ Service Account does NOT have access to {SITE_URL}", flush=True)
+    print("Error details:", e)
+    sys.exit(1)
+
+# ---------- BIGQUERY CLIENT ----------
+bq_client = bigquery.Client(credentials=credentials, project=credentials.project_id)
+table_ref = bq_client.dataset(BQ_DATASET).table(BQ_TABLE)
+
+# ---------- ENSURE TABLE EXISTS ----------
 def ensure_table():
     try:
-        bq_client.get_table(TABLE_REF)
-        print(f"[INFO] Table {TABLE_ID} exists.")
-    except Exception:
-        print(f"[INFO] Table {TABLE_ID} not found. Creating...")
-        table = bigquery.Table(TABLE_REF, schema=SCHEMA)
+        bq_client.get_table(table_ref)
+        print(f"[INFO] Table {BQ_TABLE} exists.", flush=True)
+    except:
+        print(f"[INFO] Table {BQ_TABLE} not found. Creating...", flush=True)
+        schema = [
+            bigquery.SchemaField("Date", "DATE"),
+            bigquery.SchemaField("Query", "STRING"),
+            bigquery.SchemaField("Page", "STRING"),
+            bigquery.SchemaField("Clicks", "INTEGER"),
+            bigquery.SchemaField("Impressions", "INTEGER"),
+            bigquery.SchemaField("CTR", "FLOAT"),
+            bigquery.SchemaField("Position", "FLOAT"),
+            bigquery.SchemaField("unique_key", "STRING"),
+        ]
+        table = bigquery.Table(table_ref, schema=schema)
+        table.clustering_fields = ["Date", "Query"]
         bq_client.create_table(table)
-        print(f"[INFO] Table {TABLE_ID} created.")
+        print(f"[INFO] Table {BQ_TABLE} created.", flush=True)
 
-# ==========================================================
-# 📦 FETCH EXISTING KEYS
-# ==========================================================
+# ---------- HELPER: create unique key ----------
+def stable_key(row):
+    query = (row.get('Query') or '').strip().lower()
+    page = (row.get('Page') or '').strip().lower().rstrip('/')
+    date_raw = row.get('Date')
+    if isinstance(date_raw, str):
+        date = date_raw[:10]
+    elif isinstance(date_raw, datetime):
+        date = date_raw.strftime("%Y-%m-%d")
+    else:
+        date = str(date_raw)[:10]
+    det_tuple = (query, page, date)
+    s = "|".join(det_tuple)
+    return hashlib.sha256(s.encode('utf-8')).hexdigest()
+
+# ---------- FETCH EXISTING KEYS FROM BIGQUERY ----------
 def get_existing_keys():
-    query = f"""
-        SELECT CONCAT(site_url, '|', CAST(date AS STRING), '|', query, '|', page, '|', country, '|', device) AS key
-        FROM `{TABLE_REF}`
-        WHERE date BETWEEN '{start_date}' AND '{end_date}'
-    """
     try:
-        df = bq_client.query(query).result().to_dataframe()
-        print(f"[INFO] Retrieved {len(df)} existing keys from BigQuery.")
-        return set(df["key"].values)
+        query = f"SELECT unique_key FROM `{BQ_PROJECT}.{BQ_DATASET}.{BQ_TABLE}`"
+        df = bq_client.query(query).to_dataframe()
+        print(f"[INFO] Retrieved {len(df)} existing keys from BigQuery.", flush=True)
+        return set(df['unique_key'].astype(str).tolist())
     except Exception as e:
-        print(f"[WARN] Failed to fetch existing keys: {e}")
+        print(f"[WARN] Failed to fetch existing keys: {e}", flush=True)
         return set()
 
-# ==========================================================
-# 💾 INSERT INTO BIGQUERY
-# ==========================================================
-def insert_rows_to_bigquery(df):
+# ---------- UPLOAD TO BIGQUERY ----------
+def upload_to_bq(df):
     if df.empty:
-        return 0
-    bq_client.load_table_from_dataframe(df, TABLE_REF).result()
-    print(f"[INFO] Inserted {len(df)} rows to BigQuery.")
-    return len(df)
+        print("[INFO] No new rows to insert.", flush=True)
+        return
+    df['Date'] = pd.to_datetime(df['Date'])
+    if DEBUG_MODE:
+        print(f"[DEBUG] Debug mode ON: skipping insert of {len(df)} rows to BigQuery")
+        return
+    try:
+        job = bq_client.load_table_from_dataframe(df, table_ref)
+        job.result()
+        print(f"[INFO] Inserted {len(df)} rows to BigQuery.", flush=True)
+    except Exception as e:
+        print(f"[ERROR] Failed to insert rows: {e}", flush=True)
 
-# ==========================================================
-# 🚀 FETCH GSC DATA
-# ==========================================================
-def fetch_gsc_data():
+# ---------- FETCH GSC DATA ----------
+def fetch_gsc_data(start_date, end_date):
     all_rows = []
-    row_limit = 25000
     start_row = 0
-    total_new_rows = 0
     existing_keys = get_existing_keys()
+    batch_index = 1
 
     while True:
         request = {
-            "startDate": start_date,
-            "endDate": end_date,
-            "dimensions": ["query", "page", "country", "device"],
-            "rowLimit": row_limit,
-            "startRow": start_row,
+            'startDate': start_date,
+            'endDate': end_date,
+            'dimensions': ['date','query','page'],
+            'rowLimit': ROW_LIMIT,
+            'startRow': start_row
         }
-        response = webmasters_service.searchanalytics().query(siteUrl=SITE_URL, body=request).execute()
-        rows = response.get("rows", [])
+
+        try:
+            resp = service.searchanalytics().query(siteUrl=SITE_URL, body=request).execute()
+        except Exception as e:
+            print(f"[ERROR] Timeout or error: {e}, retrying in {RETRY_DELAY} sec...", flush=True)
+            time.sleep(RETRY_DELAY)
+            continue
+
+        rows = resp.get('rows', [])
         if not rows:
+            print("[INFO] No more rows returned from GSC.", flush=True)
             break
 
-        batch_data = []
-        for row in rows:
-            keys = row["keys"]
-            record = {
-                "site_url": SITE_URL,
-                "date": start_date,
-                "query": keys[0],
-                "page": keys[1],
-                "country": keys[2],
-                "device": keys[3],
-                "clicks": row.get("clicks", 0),
-                "impressions": row.get("impressions", 0),
-                "ctr": row.get("ctr", 0),
-                "position": row.get("position", 0),
-            }
-            record_key = f"{SITE_URL}|{record['date']}|{record['query']}|{record['page']}|{record['country']}|{record['device']}"
-            if record_key not in existing_keys:
-                batch_data.append(record)
-                existing_keys.add(record_key)
+        batch_count = 0
+        batch_new_rows = []
+        for r in rows:
+            date = r['keys'][0]
+            query_text = r['keys'][1]
+            page = r['keys'][2]
+            clicks = r.get('clicks',0)
+            impressions = r.get('impressions',0)
+            ctr = r.get('ctr',0)
+            position = r.get('position',0)
+            key = stable_key({
+                'Query': query_text,
+                'Page': page,
+                'Date': date
+            })
+            if key not in existing_keys:
+                existing_keys.add(key)
+                batch_new_rows.append([date, query_text, page, clicks, impressions, ctr, position, key])
+                batch_count += 1
 
-        if batch_data:
-            df = pd.DataFrame(batch_data)
-            total_new_rows += insert_rows_to_bigquery(df)
-            print(f"[INFO] Batch {start_row // row_limit + 1}: Fetched {len(rows)} rows, {len(batch_data)} new rows.")
-        else:
-            print(f"[INFO] Batch {start_row // row_limit + 1}: Fetched {len(rows)} rows, no new rows.")
+        print(f"[INFO] Batch {batch_index}: Fetched {len(rows)} rows, {batch_count} new rows.", flush=True)
+        if batch_new_rows:
+            df_batch = pd.DataFrame(batch_new_rows, columns=['Date','Query','Page','Clicks','Impressions','CTR','Position','unique_key'])
+            upload_to_bq(df_batch)
 
-        if len(rows) < row_limit:
+        batch_index += 1
+        if len(rows) < ROW_LIMIT:
             break
-        start_row += row_limit
+        start_row += len(rows)
 
-    print(f"[INFO] Finished fetching all data. Total new rows: {total_new_rows}")
+    return pd.DataFrame(all_rows, columns=['Date','Query','Page','Clicks','Impressions','CTR','Position','unique_key'])
 
-# ==========================================================
-# 🏁 MAIN
-# ==========================================================
+# ---------- MAIN ----------
 if __name__ == "__main__":
     ensure_table()
-    fetch_gsc_data()
+    df = fetch_gsc_data(START_DATE, END_DATE)
+    print(f"[INFO] Finished fetching all data. Total new rows: {len(df)}", flush=True)
