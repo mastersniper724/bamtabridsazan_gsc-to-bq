@@ -7,6 +7,7 @@
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from google.cloud import bigquery
+from google.cloud import bigquery
 import pandas as pd
 from datetime import datetime, timedelta
 import hashlib
@@ -15,6 +16,7 @@ import os
 import json
 import sys
 import argparse
+import warnings
 
 # ---------- CONFIG ----------
 SITE_URL = 'https://bamtabridsazan.com/'
@@ -99,9 +101,27 @@ def stable_key(row):
 def get_existing_keys():
     try:
         query = f"SELECT unique_key FROM `{BQ_PROJECT}.{BQ_DATASET}.{BQ_TABLE}`"
-        df = bq_client.query(query).to_dataframe()
+
+        # ایجاد کلاینت BigQuery Storage
+        try:
+            from google.cloud import bigquery_storage
+            bqstorage_client = bigquery_storage.BigQueryReadClient()
+            use_bqstorage = True
+        except Exception:
+            bqstorage_client = None
+            use_bqstorage = False
+
+        # فراخوانی Query و تبدیل به DataFrame با چک Storage
+        if use_bqstorage:
+            df = bq_client.query(query).to_dataframe(bqstorage_client=bqstorage_client)
+        else:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                df = bq_client.query(query).to_dataframe()
+
         print(f"[INFO] Retrieved {len(df)} existing keys from BigQuery.", flush=True)
         return set(df['unique_key'].astype(str).tolist())
+
     except Exception as e:
         print(f"[WARN] Failed to fetch existing keys: {e}", flush=True)
         return set()
