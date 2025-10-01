@@ -1,7 +1,7 @@
 # gsc-to-bq-debug-batches.py
 import sys
 import os
-from gsc_to_bq import fetch_gsc_data, insert_to_bq  # تابع اصلی از فایل gsc_to_bq.py
+from gsc_to_bq import fetch_gsc_data  # تابع اصلی از فایل gsc_to_bq.py
 import datetime
 
 def main():
