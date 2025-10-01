@@ -23,6 +23,8 @@ jobs:
           if [ -f bamtabridsazan_gsc-to-bq/requirements.txt ]; then pip install -r bamtabridsazan_gsc-to-bq/requirements.txt; fi
           # اطمینان از نصب کتابخانه های گوگل
           pip install pandas google-auth google-cloud-bigquery google-api-python-client google-auth-httplib2
+          # رفع ارورهای انتهای فایل output
+          pip install db-dtypes pyarrow
 
       # ✅ ساخت فایل gcp-key.json از سکرت Base64
       - name: Decode GCP Key from Base64
@@ -36,8 +38,21 @@ jobs:
           echo "Running script: ./gsc-to-bq-debug-batches.py"
           python ./gsc-to-bq-debug-batches.py > output_debug.txt || echo "Script failed with exit code $?"
 
-      - name: Upload debug output
+      # ✅ آپلود artifact های دیباگ
+      - name: Upload debug output TXT
         uses: actions/upload-artifact@v4
         with:
-          name: gsc-debug-output
+          name: gsc-debug-output-txt
           path: output_debug.txt
+
+      - name: Upload debug CSV with unique_key_new
+        uses: actions/upload-artifact@v4
+        with:
+          name: gsc-debug-output-csv
+          path: output_debug.csv
+
+      - name: Upload duplicates report
+        uses: actions/upload-artifact@v4
+        with:
+          name: gsc-debug-duplicates
+          path: duplicates_report.csv
