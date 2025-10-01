@@ -23,11 +23,11 @@ def save_debug_log(filename, batches):
 
 def main():
     # Run اول
-    batches_1 = fetch_batches(batch_size=25000, total_batches=3)
+    batches_1 = fetch_gsc_data(batch_size=25000, total_batches=3)
     save_debug_log(LOG_FILE_1, batches_1)
 
     # Run دوم
-    batches_2 = fetch_batches(batch_size=25000, total_batches=3)
+    batches_2 = fetch_gsc_data(batch_size=25000, total_batches=3)
     save_debug_log(LOG_FILE_2, batches_2)
 
 if __name__ == "__main__":
