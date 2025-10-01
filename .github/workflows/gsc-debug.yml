@@ -21,6 +21,11 @@ jobs:
           python -m pip install --upgrade pip
           if [ -f bamtabridsazan_gsc-to-bq/requirements.txt ]; then pip install -r bamtabridsazan_gsc-to-bq/requirements.txt; fi
 
+      - name: List repo files for debug
+        run: |
+          echo "Listing repo files to check paths..."
+          ls -R
+
       - name: Run debug Python script
         run: |
           python bamtabridsazan_gsc-to-bq/gsc-to-bq-debug-batches.py > output_debug.txt
