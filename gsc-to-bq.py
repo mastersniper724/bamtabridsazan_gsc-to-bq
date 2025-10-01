@@ -135,7 +135,11 @@ def fetch_gsc_data(start_date, end_date):
             impressions = r.get('impressions',0)
             ctr = r.get('ctr',0)
             position = r.get('position',0)
-            key = generate_key(date, query_text, page)
+            key = stable_key({
+                'Query': query_text,
+                'Page': page,
+                'Date': date
+            })
             if key not in existing_keys:
                 existing_keys.add(key)
                 all_rows.append([date, query_text, page, clicks, impressions, ctr, position, key])
