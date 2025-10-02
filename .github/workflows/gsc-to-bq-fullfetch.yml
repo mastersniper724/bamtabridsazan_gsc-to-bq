@@ -48,7 +48,7 @@ jobs:
           python gsc_to_bq_fullfetch_test.py
 
       - name: Upload CSV artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: gsc_fullfetch_csv
           path: gsc_fullfetch_test_*.csv
