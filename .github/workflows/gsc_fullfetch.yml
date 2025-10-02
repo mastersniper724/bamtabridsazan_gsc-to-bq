@@ -1,4 +1,4 @@
-name: GSC Full Fetch to BigQuery
+name: GSC Full Fetch to BigQuery (rev02)
 
 on:
   workflow_dispatch:
@@ -6,53 +6,68 @@ on:
       start_date:
         description: 'Start date (YYYY-MM-DD)'
         required: true
+        default: '2024-08-01'
       end_date:
         description: 'End date (YYYY-MM-DD)'
         required: true
+        default: '2025-09-30'
       debug:
-        description: 'Enable debug mode (true/false)'
+        description: 'Enable debug mode'
         required: false
         default: 'false'
-      csv_test:
-        description: 'Optional CSV file path for testing'
-        required: false
-        default: ''
 
 jobs:
-  fullfetch:
+  fullfetch-gsc-to-bq:
     runs-on: ubuntu-latest
-    env:
-      GCP_KEY_PATH: ${{ secrets.GCP_KEY_JSON_PATH }}  # مسیر سرویس اکانت در رنر
-
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: "3.11"
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install google-api-python-client google-auth google-cloud-bigquery
+          pip install google-auth google-auth-oauthlib google-auth-httplib2 google-api-python-client google-cloud-bigquery tqdm pandas pyarrow db-dtypes pandas_gbq
 
-      - name: Run GSC Full Fetch
+      - name: Write GCP credentials file
         run: |
-          START_DATE="${{ github.event.inputs.start_date }}"
-          END_DATE="${{ github.event.inputs.end_date }}"
-          DEBUG_FLAG=$([[ "${{ github.event.inputs.debug }}" == "true" ]] && echo "--debug")
-          CSV_FLAG=""
-          if [[ ! -z "${{ github.event.inputs.csv_test }}" ]]; then
-            CSV_FLAG="--csv-test ${{ github.event.inputs.csv_test }}"
+          if [ -n "${{ secrets.BAMTABRIDSAZAN_GCP_SA_KEY_BASE64 }}" ]; then
+            printf "%s" "${{ secrets.BAMTABRIDSAZAN_GCP_SA_KEY_BASE64 }}" | base64 --decode > gcp-key.json
+          elif [ -n "${{ secrets.BAMTABRIDSAZAN_GCP_SA_KEY }}" ]; then
+            printf "%s" "${{ secrets.BAMTABRIDSAZAN_GCP_SA_KEY }}" > gcp-key.json
+          else
+            echo "❌ ERROR: Missing GCP credentials secret."
+            exit 1
           fi
-          echo "[INFO] Running GSC Full Fetch: $START_DATE -> $END_DATE"
-          python gsc_to_bq_rev5_fullfetch.py --start-date $START_DATE --end-date $END_DATE $DEBUG_FLAG $CSV_FLAG
 
-      - name: Upload CSV artifact (optional)
-        if: ${{ github.event.inputs.csv_test != '' }}
+      - name: Validate gcp-key.json
+        run: python -c "import json; json.load(open('gcp-key.json'))"
+
+      - name: Run Full Fetch Python
+        env:
+          GOOGLE_APPLICATION_CREDENTIALS: gcp-key.json
+        shell: bash
+        run: |
+          if [ "${{ github.event.inputs.debug }}" = "true" ]; then
+            DEBUG_FLAG="--debug"
+          else
+            DEBUG_FLAG=""
+          fi
+          CSV_TEST_FILE="gsc_fullfetch_test_rev02_${{ github.run_id }}.csv"
+
+          python gsc_to_bq_rev6_fullfetch.py \
+            $DEBUG_FLAG \
+            --start-date "${{ github.event.inputs.start_date }}" \
+            --end-date "${{ github.event.inputs.end_date }}" \
+            --csv-test "${CSV_TEST_FILE}"
+
+      - name: Upload CSV test output
+        if: ${{ github.event.inputs.debug == 'true' }}
         uses: actions/upload-artifact@v4
         with:
-          name: gsc_csv_test
-          path: ${{ github.event.inputs.csv_test }}
+          name: gsc_fullfetch_test_csv_rev02
+          path: gsc_fullfetch_test_rev02_*.csv
