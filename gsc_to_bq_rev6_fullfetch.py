@@ -1,8 +1,8 @@
 # ============================================================
 # File: gsc_to_bq_rev6.5_fullfetch.py
-# Description: Full Fetch from Google Search Console API
+# Description: Full Fetch from Google Search Console API with Duplicate Prevention
 # Author: MasterSniper
-# Revision: Rev6.5 - 2025-10-02 (searchAppearance batch removed)
+# Revision: Rev6.5 - 2025-10-02 (Updated with duplicate prevention)
 # ============================================================
 
 import os
@@ -24,6 +24,8 @@ SCOPES = ["https://www.googleapis.com/auth/webmasters.readonly"]
 SITE_URL = "https://bamtabridsazan.com/"
 TABLE_ID = "bamtabridsazan.seo_reports.bamtabridsazan__gsc__raw_data_fullfetch"
 SERVICE_ACCOUNT_FILE = "gcp-key.json"
+ROW_LIMIT = 25000
+RETRY_DELAY = 60
 
 # ============================================================
 # ✅ Helper: Unique Key Generator
@@ -55,18 +57,34 @@ def get_gsc_service():
     return build("searchconsole", "v1", credentials=creds)
 
 # ============================================================
+# ✅ Fetch Existing Keys from BigQuery
+# ============================================================
+def get_existing_keys():
+    bq = get_bq_client()
+    try:
+        query = f"SELECT unique_key FROM `{TABLE_ID}`"
+        df = bq.query(query).to_dataframe()
+        return set(df['unique_key'].astype(str).tolist())
+    except Exception as e:
+        print(f"[WARN] Failed to fetch existing keys: {e}")
+        return set()
+
+# ============================================================
 # ✅ Fetch Data Function
 # ============================================================
 def fetch_gsc_data(start_date, end_date):
     service = get_gsc_service()
     all_data = []
 
-    # ✅ Only batches that previously worked, searchAppearance removed
+    # ✅ Batchهای ترکیبی
     DIMENSION_BATCHES = [
         ["date", "query", "page"],
         ["date", "query", "country"],
         ["date", "query", "device"],
+        ["date", "searchAppearance"],  # ✅ فقط date+searchAppearance
     ]
+
+    existing_keys = get_existing_keys()
 
     for i, dims in enumerate(DIMENSION_BATCHES, start=1):
         print(f"[INFO] Batch {i}, dims {dims}: fetching data...")
@@ -75,7 +93,7 @@ def fetch_gsc_data(start_date, end_date):
             "startDate": start_date,
             "endDate": end_date,
             "dimensions": dims,
-            "rowLimit": 25000,
+            "rowLimit": ROW_LIMIT,
         }
 
         try:
@@ -83,6 +101,7 @@ def fetch_gsc_data(start_date, end_date):
             rows = response.get("rows", [])
             print(f"[INFO] Batch {i}, dims {dims}: fetched {len(rows)} rows")
 
+            batch_new_rows = []
             for r in rows:
                 keys = r.get("keys", [])
                 row_data = {
@@ -91,21 +110,27 @@ def fetch_gsc_data(start_date, end_date):
                     "Page": keys[2] if "page" in dims and len(keys) > 2 else None,
                     "Country": keys[2] if "country" in dims and len(keys) > 2 else None,
                     "Device": keys[2] if "device" in dims and len(keys) > 2 else None,
-                    "SearchAppearance": None,  # Removed batch
+                    "SearchAppearance": keys[1] if "searchAppearance" in dims and len(keys) > 1 else None,
                     "Clicks": r.get("clicks", 0),
                     "Impressions": r.get("impressions", 0),
                     "CTR": r.get("ctr", 0.0),
                     "Position": r.get("position", 0.0),
                 }
-                all_data.append(row_data)
+
+                # ✅ Prevent Duplicate Rows
+                unique_key = generate_unique_key(row_data)
+                if unique_key not in existing_keys:
+                    existing_keys.add(unique_key)
+                    row_data["unique_key"] = unique_key
+                    batch_new_rows.append(row_data)
+
+            all_data.extend(batch_new_rows)
 
         except Exception as e:
             print(f"[ERROR] Batch {i} failed: {e}")
-            time.sleep(60)
+            time.sleep(RETRY_DELAY)
 
     df = pd.DataFrame(all_data)
-    if not df.empty:
-        df["unique_key"] = df.apply(generate_unique_key, axis=1)
     return df
 
 # ============================================================
@@ -118,7 +143,7 @@ def upload_to_bq(df):
 
     bq = get_bq_client()
 
-    # 🔹 حذف Unknown (در صورت وجود)
+    # 🔹 حذف Unknown
     df.replace("Unknown", None, inplace=True)
 
     # 🔹 تبدیل تاریخ‌ها
@@ -139,7 +164,7 @@ def upload_to_bq(df):
             bigquery.SchemaField("Position", "FLOAT"),
             bigquery.SchemaField("unique_key", "STRING"),
         ],
-        clustering_fields=["Query", "Page"]  # ✅ Keep clustering same as previous
+        clustering_fields=["Query", "Page"]
     )
 
     print(f"[INFO] Uploading {len(df)} rows to BigQuery...")
