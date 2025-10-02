@@ -1,7 +1,7 @@
 # =================================================
-# FILE: gsc_to_bq_rev6_fullfetch.py
-# REV: 6.1
-# PURPOSE: Full Fetch GSC to BigQuery loader with all key dimensions, safe index handling
+# FILE: gsc_to_bq_rev6.2_fullfetch.py
+# REV: 6.2
+# PURPOSE: Full Fetch GSC to BigQuery loader with all key dimensions
 # =================================================
 
 from google.oauth2 import service_account
@@ -32,7 +32,7 @@ parser.add_argument("--debug", action="store_true", help="Enable debug mode (ski
 parser.add_argument("--csv-test", type=str, default="gsc_fullfetch_test.csv", help="CSV test output file")
 args = parser.parse_args()
 
-START_DATE = args.start_date or (datetime.utcnow() - timedelta(days=365*1)).strftime('%Y-%m-%d')
+START_DATE = args.start_date or (datetime.utcnow() - timedelta(days=365)).strftime('%Y-%m-%d')
 END_DATE = args.end_date or datetime.utcnow().strftime('%Y-%m-%d')
 DEBUG_MODE = args.debug
 CSV_TEST_FILE = args.csv_test
@@ -135,13 +135,15 @@ def fetch_gsc_data(start_date, end_date):
     all_rows = []
     existing_keys = get_existing_keys()
     batch_index = 1
+
+    # Dimensions
     dimensions_list = [
         ['date','query','page'],
         ['date','query'],
         ['date','page'],
         ['date','country'],
         ['date','device'],
-        ['date','searchAppearance']
+        ['date','searchAppearance']  # Only single dimension
     ]
 
     for dims in dimensions_list:
@@ -168,25 +170,18 @@ def fetch_gsc_data(start_date, end_date):
 
             batch_new_rows = []
             for r in rows:
-                keys_list = r.get('keys', [])
                 row_data = {
-                    'Date': keys_list[0] if len(keys_list) > 0 else None,
-                    'Query': keys_list[1] if 'query' in dims and len(keys_list) > 1 else None,
-                    'Page': keys_list[2] if 'page' in dims and len(keys_list) > 2 else None,
-                    'Country': keys_list[1] if 'country' in dims and len(keys_list) > 1 else None,
-                    'Device': keys_list[1] if 'device' in dims and len(keys_list) > 1 else None,
-                    'SearchAppearance': keys_list[1] if 'searchAppearance' in dims and len(keys_list) > 1 else None,
+                    'Date': r['keys'][0],
+                    'Query': r['keys'][1] if 'query' in dims and len(r['keys'])>1 else None,
+                    'Page': r['keys'][2] if 'page' in dims and len(r['keys'])>2 else None,
+                    'Country': r['keys'][1] if 'country' in dims and len(r['keys'])>1 else None,
+                    'Device': r['keys'][1] if 'device' in dims and len(r['keys'])>1 else None,
+                    'SearchAppearance': r['keys'][1] if 'searchAppearance' in dims and len(r['keys'])>1 else None,
                     'Clicks': r.get('clicks',0),
                     'Impressions': r.get('impressions',0),
                     'CTR': r.get('ctr',0),
                     'Position': r.get('position',0)
                 }
-
-                # Fill missing values with "unknown" for these dimensions
-                for field in ['Country','Device','SearchAppearance']:
-                    if row_data[field] is None:
-                        row_data[field] = 'unknown'
-
                 key = stable_key(row_data)
                 if key not in existing_keys:
                     existing_keys.add(key)
@@ -198,10 +193,10 @@ def fetch_gsc_data(start_date, end_date):
                 upload_to_bq(df_batch)
                 all_rows.extend(batch_new_rows)
 
-            batch_index += 1
             if len(rows) < ROW_LIMIT:
                 break
             start_row += ROW_LIMIT
+            batch_index += 1
 
     # Write CSV for test
     df_all = pd.DataFrame(all_rows)
