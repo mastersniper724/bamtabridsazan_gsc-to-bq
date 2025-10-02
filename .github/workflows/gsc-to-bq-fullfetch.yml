@@ -1,12 +1,12 @@
-name: Full GSC to BigQuery (Incremental Daily)
+name: GSC Full Fetch → CSV Artifact
 
 on:
+  workflow_dispatch:
   schedule:
     - cron: "30 22 * * *"  # 2:00 AM Tehran time
-  workflow_dispatch:
 
 jobs:
-  sync-gsc-to-bq:
+  gsc-fullfetch:
     runs-on: ubuntu-latest
 
     steps:
@@ -21,7 +21,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install google-auth google-auth-oauthlib google-auth-httplib2 google-api-python-client google-cloud-bigquery tqdm pandas pyarrow db-dtypes pandas_gbq
+          pip install google-auth google-auth-oauthlib google-auth-httplib2 google-api-python-client pandas pyarrow google-cloud-bigquery tqdm db-dtypes pandas_gbq
 
       - name: Write GCP credentials file
         run: |
@@ -40,9 +40,15 @@ jobs:
       - name: Validate gcp-key.json
         run: python -c "import json; json.load(open('gcp-key.json')); print('✅ gcp-key.json is valid')"
 
-      - name: Run GSC → BigQuery Incremental Sync
+      - name: Run GSC → Full Fetch CSV
         env:
           GOOGLE_APPLICATION_CREDENTIALS: gcp-key.json
         run: |
-          echo "🚀 Running incremental GSC sync..."
+          echo "🚀 Running GSC Full Fetch..."
           python gsc_to_bq_fullfetch_test.py
+
+      - name: Upload CSV artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: gsc_fullfetch_csv
+          path: gsc_fullfetch_test_*.csv
