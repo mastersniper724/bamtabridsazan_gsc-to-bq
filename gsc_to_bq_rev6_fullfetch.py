@@ -1,7 +1,7 @@
 # =================================================
 # FILE: gsc_to_bq_rev6.6_batchload.py
 # REV: 6.6-BatchLoad
-# PURPOSE: Full Fetch GSC to BigQuery loader with all key dimensions using Batch Load
+# PURPOSE: Full Fetch GSC to BigQuery loader with Batch Load for all key dimensions
 # =================================================
 
 from google.oauth2 import service_account
@@ -23,17 +23,17 @@ BQ_PROJECT = 'bamtabridsazan'
 BQ_DATASET = 'seo_reports'
 BQ_TABLE = 'bamtabridsazan__gsc__raw_data_fullfetch'
 ROW_LIMIT = 25000
-RETRY_DELAY = 60  # seconds in case of timeout
+RETRY_DELAY = 60  # seconds
 
 # ---------- ARGUMENT PARSER ----------
-parser = argparse.ArgumentParser(description="GSC to BigQuery Full Fetch Loader (Batch Load)")
+parser = argparse.ArgumentParser(description="GSC to BigQuery Full Fetch Batch Loader")
 parser.add_argument("--start-date", type=str, help="Start date YYYY-MM-DD for full fetch")
 parser.add_argument("--end-date", type=str, help="End date YYYY-MM-DD")
 parser.add_argument("--debug", action="store_true", help="Enable debug mode (skip BQ insert)")
-parser.add_argument("--csv-test", type=str, default="gsc_fullfetch_test.csv", help="CSV test output file")
+parser.add_argument("--csv-test", type=str, default="gsc_fullfetch_batch_test.csv", help="CSV test output file")
 args = parser.parse_args()
 
-START_DATE = args.start_date or (datetime.utcnow() - timedelta(days=365*1)).strftime('%Y-%m-%d')
+START_DATE = args.start_date or (datetime.utcnow() - timedelta(days=365)).strftime('%Y-%m-%d')
 END_DATE = args.end_date or datetime.utcnow().strftime('%Y-%m-%d')
 DEBUG_MODE = args.debug
 CSV_TEST_FILE = args.csv_test
@@ -89,7 +89,7 @@ def stable_key(row):
     s = "|".join(keys)
     return hashlib.sha256(s.encode('utf-8')).hexdigest()
 
-# ---------- FETCH EXISTING KEYS FROM BIGQUERY ----------
+# ---------- FETCH EXISTING KEYS ----------
 def get_existing_keys():
     try:
         query = f"SELECT unique_key FROM `{BQ_PROJECT}.{BQ_DATASET}.{BQ_TABLE}`"
@@ -110,13 +110,12 @@ def get_existing_keys():
 
         print(f"[INFO] Retrieved {len(df)} existing keys from BigQuery.", flush=True)
         return set(df['unique_key'].astype(str).tolist())
-
     except Exception as e:
         print(f"[WARN] Failed to fetch existing keys: {e}", flush=True)
         return set()
 
-# ---------- UPLOAD TO BIGQUERY (BATCH LOAD) ----------
-def upload_to_bq(df):
+# ---------- UPLOAD TO BIGQUERY (BATCH) ----------
+def upload_to_bq_batch(df):
     if df.empty:
         print("[INFO] No new rows to insert.", flush=True)
         return
@@ -127,26 +126,26 @@ def upload_to_bq(df):
     try:
         job = bq_client.load_table_from_dataframe(df, table_ref)
         job.result()
-        print(f"[INFO] Inserted {len(df)} rows to BigQuery via Batch Load.", flush=True)
+        print(f"[INFO] Inserted {len(df)} rows to BigQuery (Batch Load).", flush=True)
     except Exception as e:
-        print(f"[ERROR] Failed to insert rows: {e}", flush=True)
+        print(f"[ERROR] Failed to insert batch: {e}", flush=True)
 
 # ---------- FETCH GSC DATA ----------
 def fetch_gsc_data(start_date, end_date):
     all_rows = []
     existing_keys = get_existing_keys()
     batch_index = 1
-
-    # پنج Batch اصلی
-    dimensions_list = [
-        ['date', 'query', 'page'],
-        ['date', 'query', 'country'],
-        ['date', 'query', 'device'],
-        ['date', 'query', 'searchAppearance'],
-        # اضافه کردن batch دیگری اگر نیاز باشد
+    # Five batches: ['date','query','page'], ['date','query','country'], ['date','query','device'], ['date','query','searchAppearance'], ['date','page','searchAppearance']
+    dimensions_batches = [
+        ['date','query','page'],
+        ['date','query','country'],
+        ['date','query','device'],
+        ['date','query','searchAppearance'],
+        ['date','page','searchAppearance']
     ]
 
-    for dims in dimensions_list:
+    for dims in dimensions_batches:
+        print(f"[INFO] Batch {batch_index}, dims {dims}: fetching data...")
         start_row = 0
         while True:
             request = {
@@ -156,7 +155,6 @@ def fetch_gsc_data(start_date, end_date):
                 'rowLimit': ROW_LIMIT,
                 'startRow': start_row
             }
-
             try:
                 resp = service.searchanalytics().query(siteUrl=SITE_URL, body=request).execute()
             except Exception as e:
@@ -187,24 +185,20 @@ def fetch_gsc_data(start_date, end_date):
                     existing_keys.add(key)
                     batch_new_rows.append({**row_data, 'unique_key': key})
 
-            all_rows.extend(batch_new_rows)
-            print(f"[INFO] Batch {batch_index}, dims {dims}: fetched {len(rows)} rows, {len(batch_new_rows)} new rows.", flush=True)
+            if batch_new_rows:
+                df_batch = pd.DataFrame(batch_new_rows)
+                upload_to_bq_batch(df_batch)
+                all_rows.extend(batch_new_rows)
 
             if len(rows) < ROW_LIMIT:
                 break
-            else:
-                start_row += ROW_LIMIT
+            start_row += ROW_LIMIT
 
         batch_index += 1
 
-    # DataFrame نهایی و CSV تستی
     df_all = pd.DataFrame(all_rows)
     df_all.to_csv(CSV_TEST_FILE, index=False)
     print(f"[INFO] CSV test output written: {CSV_TEST_FILE}", flush=True)
-
-    # آپلود Batch Load به BigQuery
-    upload_to_bq(df_all)
-
     return df_all
 
 # ---------- MAIN ----------
