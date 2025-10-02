@@ -1,193 +1,215 @@
-import argparse
-import csv
-import os
-import sys
-import time
-from datetime import datetime, timedelta
+# =================================================
+# FILE: gsc_to_bq_rev6.6_batchload.py
+# REV: 6.6-BatchLoad
+# PURPOSE: Full Fetch GSC to BigQuery loader with all key dimensions using Batch Load
+# =================================================
 
-from googleapiclient.discovery import build
 from google.oauth2 import service_account
+from googleapiclient.discovery import build
 from google.cloud import bigquery
+import pandas as pd
+from datetime import datetime, timedelta
+import hashlib
+import time
+import os
+import json
+import sys
+import argparse
+import warnings
 
-# ==========================
-# CONFIG
-# ==========================
-SCOPES = ["https://www.googleapis.com/auth/webmasters.readonly"]
-KEY_FILE = "gcp-key.json"
-SITE_URL = "https://bamtabridsazan.com/"
-BQ_PROJECT = "bamtabridsazan"
-BQ_DATASET = "seo_reports"
-BQ_TABLE = "bamtabridsazan__gsc__raw_data_fullfetch"
+# ---------- CONFIG ----------
+SITE_URL = 'https://bamtabridsazan.com/'
+BQ_PROJECT = 'bamtabridsazan'
+BQ_DATASET = 'seo_reports'
+BQ_TABLE = 'bamtabridsazan__gsc__raw_data_fullfetch'
+ROW_LIMIT = 25000
+RETRY_DELAY = 60  # seconds in case of timeout
 
-# ==========================
-# FUNCTIONS
-# ==========================
-def get_gsc_service():
-    creds = service_account.Credentials.from_service_account_file(KEY_FILE, scopes=SCOPES)
-    service = build("searchconsole", "v1", credentials=creds)
-    return service
+# ---------- ARGUMENT PARSER ----------
+parser = argparse.ArgumentParser(description="GSC to BigQuery Full Fetch Loader (Batch Load)")
+parser.add_argument("--start-date", type=str, help="Start date YYYY-MM-DD for full fetch")
+parser.add_argument("--end-date", type=str, help="End date YYYY-MM-DD")
+parser.add_argument("--debug", action="store_true", help="Enable debug mode (skip BQ insert)")
+parser.add_argument("--csv-test", type=str, default="gsc_fullfetch_test.csv", help="CSV test output file")
+args = parser.parse_args()
 
-def get_bq_client():
-    return bigquery.Client()
+START_DATE = args.start_date or (datetime.utcnow() - timedelta(days=365*1)).strftime('%Y-%m-%d')
+END_DATE = args.end_date or datetime.utcnow().strftime('%Y-%m-%d')
+DEBUG_MODE = args.debug
+CSV_TEST_FILE = args.csv_test
 
-def generate_unique_key(row):
-    dims = ["date", "query", "page", "country", "device", "searchAppearance"]
-    return "_".join([str(row.get(dim, "") or "Unknown") for dim in dims])
+# ---------- CREDENTIALS ----------
+service_account_file = os.environ.get("SERVICE_ACCOUNT_FILE", "gcp-key.json")
+with open(service_account_file, "r") as f:
+    sa_info = json.load(f)
+credentials = service_account.Credentials.from_service_account_info(sa_info)
 
-def fetch_gsc_data(service, start_date, end_date, dimensions, row_limit=25000):
-    all_rows = []
-    start_row = 0
+# Build Search Console service
+service = build('searchconsole', 'v1', credentials=credentials)
 
-    while True:
-        request = {
-            "startDate": start_date,
-            "endDate": end_date,
-            "dimensions": dimensions,
-            "rowLimit": row_limit,
-            "startRow": start_row
-        }
+# ---------- BIGQUERY CLIENT ----------
+bq_client = bigquery.Client(credentials=credentials, project=credentials.project_id)
+table_ref = bq_client.dataset(BQ_DATASET).table(BQ_TABLE)
 
-        try:
-            response = service.searchanalytics().query(siteUrl=SITE_URL, body=request).execute()
-        except Exception as e:
-            raise RuntimeError(e)
-
-        rows = response.get("rows", [])
-        if not rows:
-            break
-
-        for row in rows:
-            keys = row.get("keys", [])
-            record = {
-                "date": None,
-                "query": None,
-                "page": None,
-                "country": None,
-                "device": None,
-                "searchAppearance": None,
-                "clicks": row.get("clicks", 0),
-                "impressions": row.get("impressions", 0),
-                "ctr": row.get("ctr", 0),
-                "position": row.get("position", 0)
-            }
-            for i, dim in enumerate(dimensions):
-                record[dim] = keys[i] if i < len(keys) else None
-
-            all_rows.append(record)
-
-        if len(rows) < row_limit:
-            break
-        start_row += row_limit
-
-    return all_rows
-
-def ensure_table(client):
-    dataset_ref = client.dataset(BQ_DATASET)
-    table_ref = dataset_ref.table(BQ_TABLE)
+# ---------- ENSURE TABLE EXISTS ----------
+def ensure_table():
     try:
-        client.get_table(table_ref)
-        print(f"[INFO] Table {BQ_TABLE} exists.")
-    except Exception:
+        bq_client.get_table(table_ref)
+        print(f"[INFO] Table {BQ_TABLE} exists.", flush=True)
+    except:
+        print(f"[INFO] Table {BQ_TABLE} not found. Creating...", flush=True)
         schema = [
-            bigquery.SchemaField("date", "DATE"),
-            bigquery.SchemaField("query", "STRING"),
-            bigquery.SchemaField("page", "STRING"),
-            bigquery.SchemaField("country", "STRING"),
-            bigquery.SchemaField("device", "STRING"),
-            bigquery.SchemaField("searchAppearance", "STRING"),
-            bigquery.SchemaField("clicks", "FLOAT"),
-            bigquery.SchemaField("impressions", "FLOAT"),
-            bigquery.SchemaField("ctr", "FLOAT"),
-            bigquery.SchemaField("position", "FLOAT"),
-            bigquery.SchemaField("unique_key", "STRING")
+            bigquery.SchemaField("Date", "DATE"),
+            bigquery.SchemaField("Query", "STRING"),
+            bigquery.SchemaField("Page", "STRING"),
+            bigquery.SchemaField("Country", "STRING"),
+            bigquery.SchemaField("Device", "STRING"),
+            bigquery.SchemaField("SearchAppearance", "STRING"),
+            bigquery.SchemaField("Clicks", "INTEGER"),
+            bigquery.SchemaField("Impressions", "INTEGER"),
+            bigquery.SchemaField("CTR", "FLOAT"),
+            bigquery.SchemaField("Position", "FLOAT"),
+            bigquery.SchemaField("unique_key", "STRING"),
         ]
         table = bigquery.Table(table_ref, schema=schema)
-        client.create_table(table)
-        print(f"[INFO] Created table {BQ_TABLE}.")
+        table.clustering_fields = ["Date", "Query"]
+        bq_client.create_table(table)
+        print(f"[INFO] Table {BQ_TABLE} created.", flush=True)
 
-def load_existing_keys(client):
-    query = f"SELECT unique_key FROM `{BQ_PROJECT}.{BQ_DATASET}.{BQ_TABLE}`"
+# ---------- HELPER: create unique key ----------
+def stable_key(row):
+    keys = [
+        (row.get('Query') or '').strip().lower(),
+        (row.get('Page') or '').strip().lower().rstrip('/'),
+        (row.get('Country') or '').strip().lower(),
+        (row.get('Device') or '').strip().lower(),
+        (row.get('SearchAppearance') or '').strip().lower(),
+        row.get('Date')[:10] if isinstance(row.get('Date'), str) else row.get('Date').strftime("%Y-%m-%d")
+    ]
+    s = "|".join(keys)
+    return hashlib.sha256(s.encode('utf-8')).hexdigest()
+
+# ---------- FETCH EXISTING KEYS FROM BIGQUERY ----------
+def get_existing_keys():
     try:
-        rows = client.query(query).result()
-        return {row.unique_key for row in rows}
-    except Exception:
+        query = f"SELECT unique_key FROM `{BQ_PROJECT}.{BQ_DATASET}.{BQ_TABLE}`"
+        try:
+            from google.cloud import bigquery_storage
+            bqstorage_client = bigquery_storage.BigQueryReadClient()
+            use_bqstorage = True
+        except Exception:
+            bqstorage_client = None
+            use_bqstorage = False
+
+        if use_bqstorage:
+            df = bq_client.query(query).to_dataframe(bqstorage_client=bqstorage_client)
+        else:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                df = bq_client.query(query).to_dataframe()
+
+        print(f"[INFO] Retrieved {len(df)} existing keys from BigQuery.", flush=True)
+        return set(df['unique_key'].astype(str).tolist())
+
+    except Exception as e:
+        print(f"[WARN] Failed to fetch existing keys: {e}", flush=True)
         return set()
 
-def insert_rows(client, rows):
-    if not rows:
-        return 0
-    table_ref = f"{BQ_PROJECT}.{BQ_DATASET}.{BQ_TABLE}"
-    errors = client.insert_rows_json(table_ref, rows)
-    if errors:
-        print(f"[ERROR] Failed inserts: {errors}")
-    return len(rows)
-
-def write_csv_test(rows, csv_path):
-    if not rows:
+# ---------- UPLOAD TO BIGQUERY (BATCH LOAD) ----------
+def upload_to_bq(df):
+    if df.empty:
+        print("[INFO] No new rows to insert.", flush=True)
         return
-    with open(csv_path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
-        writer.writeheader()
-        writer.writerows(rows)
-    print(f"[INFO] CSV test output written: {csv_path}")
+    df['Date'] = pd.to_datetime(df['Date'])
+    if DEBUG_MODE:
+        print(f"[DEBUG] Debug mode ON: skipping insert of {len(df)} rows to BigQuery")
+        return
+    try:
+        job = bq_client.load_table_from_dataframe(df, table_ref)
+        job.result()
+        print(f"[INFO] Inserted {len(df)} rows to BigQuery via Batch Load.", flush=True)
+    except Exception as e:
+        print(f"[ERROR] Failed to insert rows: {e}", flush=True)
 
-# ==========================
-# MAIN
-# ==========================
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--start-date", required=True)
-    parser.add_argument("--end-date", required=True)
-    parser.add_argument("--csv-test", required=False)
-    parser.add_argument("--debug", action="store_true")
-    args = parser.parse_args()
+# ---------- FETCH GSC DATA ----------
+def fetch_gsc_data(start_date, end_date):
+    all_rows = []
+    existing_keys = get_existing_keys()
+    batch_index = 1
 
-    start_date = args.start_date
-    end_date = args.end_date
-    csv_path = args.csv_test
-    debug = args.debug
-
-    print(f"[INFO] Fetching data from {start_date} to {end_date}")
-
-    service = get_gsc_service()
-    bq_client = get_bq_client()
-    ensure_table(bq_client)
-    existing_keys = load_existing_keys(bq_client)
-    print(f"[INFO] Retrieved {len(existing_keys)} existing keys from BigQuery.")
-
-    all_new_rows = []
-    batches = [
-        ["date", "query", "page"],
-        ["date", "query", "country"],
-        ["date", "query", "device"],
-        ["date", "searchAppearance", "page"],  # 🔹 تست ترکیب جدید
-        ["date"]
+    # پنج Batch اصلی
+    dimensions_list = [
+        ['date', 'query', 'page'],
+        ['date', 'query', 'country'],
+        ['date', 'query', 'device'],
+        ['date', 'query', 'searchAppearance'],
+        # اضافه کردن batch دیگری اگر نیاز باشد
     ]
 
-    for i, dims in enumerate(batches, start=1):
-        print(f"[INFO] Batch {i}, dims {dims}: fetching data...")
-        try:
-            rows = fetch_gsc_data(service, start_date, end_date, dims)
-        except RuntimeError as e:
-            print(f"Error:  Batch {i} failed: {e}")
-            continue
+    for dims in dimensions_list:
+        start_row = 0
+        while True:
+            request = {
+                'startDate': start_date,
+                'endDate': end_date,
+                'dimensions': dims,
+                'rowLimit': ROW_LIMIT,
+                'startRow': start_row
+            }
 
-        print(f"[INFO] Batch {i}, dims {dims}: fetched {len(rows)} rows")
-        new_rows = []
-        for r in rows:
-            r["unique_key"] = generate_unique_key(r)
-            if r["unique_key"] not in existing_keys:
-                existing_keys.add(r["unique_key"])
-                new_rows.append(r)
-        if new_rows:
-            count = insert_rows(bq_client, new_rows)
-            print(f"[INFO] Inserted {count} rows to BigQuery.")
-            all_new_rows.extend(new_rows)
+            try:
+                resp = service.searchanalytics().query(siteUrl=SITE_URL, body=request).execute()
+            except Exception as e:
+                print(f"[ERROR] Batch {batch_index} failed: {e}, retrying in {RETRY_DELAY} sec...", flush=True)
+                time.sleep(RETRY_DELAY)
+                continue
 
-    if csv_path:
-        write_csv_test(all_new_rows, csv_path)
+            rows = resp.get('rows', [])
+            if not rows:
+                break
 
-    print(f"[INFO] Finished fetching all data. Total rows: {len(all_new_rows)}")
+            batch_new_rows = []
+            for r in rows:
+                row_data = {
+                    'Date': r['keys'][0],
+                    'Query': r['keys'][1] if 'query' in dims else None,
+                    'Page': r['keys'][2] if 'page' in dims else None,
+                    'Country': r['keys'][1] if 'country' in dims else None,
+                    'Device': r['keys'][1] if 'device' in dims else None,
+                    'SearchAppearance': r['keys'][1] if 'searchAppearance' in dims else None,
+                    'Clicks': r.get('clicks',0),
+                    'Impressions': r.get('impressions',0),
+                    'CTR': r.get('ctr',0),
+                    'Position': r.get('position',0)
+                }
+                key = stable_key(row_data)
+                if key not in existing_keys:
+                    existing_keys.add(key)
+                    batch_new_rows.append({**row_data, 'unique_key': key})
 
+            all_rows.extend(batch_new_rows)
+            print(f"[INFO] Batch {batch_index}, dims {dims}: fetched {len(rows)} rows, {len(batch_new_rows)} new rows.", flush=True)
+
+            if len(rows) < ROW_LIMIT:
+                break
+            else:
+                start_row += ROW_LIMIT
+
+        batch_index += 1
+
+    # DataFrame نهایی و CSV تستی
+    df_all = pd.DataFrame(all_rows)
+    df_all.to_csv(CSV_TEST_FILE, index=False)
+    print(f"[INFO] CSV test output written: {CSV_TEST_FILE}", flush=True)
+
+    # آپلود Batch Load به BigQuery
+    upload_to_bq(df_all)
+
+    return df_all
+
+# ---------- MAIN ----------
 if __name__ == "__main__":
-    main()
+    ensure_table()
+    print(f"[INFO] Fetching data from {START_DATE} to {END_DATE}", flush=True)
+    df = fetch_gsc_data(START_DATE, END_DATE)
+    print(f"[INFO] Finished fetching all data. Total rows: {len(df)}", flush=True)
