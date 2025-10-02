@@ -4,26 +4,28 @@ on:
   workflow_dispatch:
     inputs:
       start_date:
-        description: 'Start date YYYY-MM-DD'
+        description: 'Start date (YYYY-MM-DD)'
         required: true
-        default: '2024-01-01'
       end_date:
-        description: 'End date YYYY-MM-DD'
+        description: 'End date (YYYY-MM-DD)'
         required: true
-        default: '2025-10-01'
       debug:
-        description: 'Debug mode (true/false)'
+        description: 'Enable debug mode (true/false)'
         required: false
         default: 'false'
       csv_test:
-        description: 'Path to CSV test file (optional)'
+        description: 'Optional CSV file path for testing'
         required: false
+        default: ''
 
 jobs:
-  full_fetch:
+  fullfetch:
     runs-on: ubuntu-latest
+    env:
+      GCP_KEY_PATH: ${{ secrets.GCP_KEY_JSON_PATH }}  # مسیر سرویس اکانت در رنر
+
     steps:
-      - name: Checkout repo
+      - name: Checkout repository
         uses: actions/checkout@v3
 
       - name: Set up Python
@@ -34,25 +36,23 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install google-api-python-client google-auth google-cloud-bigquery
 
       - name: Run GSC Full Fetch
-        env:
-          START_DATE: ${{ github.event.inputs.start_date }}
-          END_DATE: ${{ github.event.inputs.end_date }}
-          DEBUG_FLAG: ${{ github.event.inputs.debug }}
-          CSV_TEST: ${{ github.event.inputs.csv_test }}
         run: |
-          CMD="python gsc_to_bq_rev5_fullfetch.py --start-date $START_DATE --end-date $END_DATE"
-          if [ "$DEBUG_FLAG" = "true" ]; then
-            CMD="$CMD --debug"
+          START_DATE="${{ github.event.inputs.start_date }}"
+          END_DATE="${{ github.event.inputs.end_date }}"
+          DEBUG_FLAG=$([[ "${{ github.event.inputs.debug }}" == "true" ]] && echo "--debug")
+          CSV_FLAG=""
+          if [[ ! -z "${{ github.event.inputs.csv_test }}" ]]; then
+            CSV_FLAG="--csv-test ${{ github.event.inputs.csv_test }}"
           fi
-          if [ -n "$CSV_TEST" ]; then
-            CMD="$CMD --csv-test $CSV_TEST"
-          fi
-          echo "Running command: $CMD"
-          $CMD
+          echo "[INFO] Running GSC Full Fetch: $START_DATE -> $END_DATE"
+          python gsc_to_bq_rev5_fullfetch.py --start-date $START_DATE --end-date $END_DATE $DEBUG_FLAG $CSV_FLAG
 
-      - name: Confirm BigQuery table
-        run: |
-          echo "Check your BQ dataset: bamtabridsazan.seo_reports.bamtabridsazan__gsc__raw_data_fullfetch"
+      - name: Upload CSV artifact (optional)
+        if: ${{ github.event.inputs.csv_test != '' }}
+        uses: actions/upload-artifact@v3
+        with:
+          name: gsc_csv_test
+          path: ${{ github.event.inputs.csv_test }}
