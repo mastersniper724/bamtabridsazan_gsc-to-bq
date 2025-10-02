@@ -1,77 +1,177 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
+# ============================================================
+# File: gsc_to_bq_rev6.5_fullfetch.py
+# Description: Full Fetch from Google Search Console API
+# Author: MasterSniper
+# Revision: Rev6.5 - 2025-10-02
+# ============================================================
 
+import os
+import sys
+import time
+import json
+import hashlib
 import argparse
 import pandas as pd
+from datetime import datetime
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
 from google.cloud import bigquery
-from gsc_fetcher import fetch_gsc_data_batch  # فرض: ماژول داخلی برای fetch
 
-# ====================================================
-# پارامترهای ورودی
-# ====================================================
-parser = argparse.ArgumentParser(description="Fetch GSC data and load to BigQuery (Rev6.5 without SearchAppearance)")
-parser.add_argument("--start-date", required=True, help="Start date YYYY-MM-DD")
-parser.add_argument("--end-date", required=True, help="End date YYYY-MM-DD")
-parser.add_argument("--csv-test", help="Optional CSV test output")
-args = parser.parse_args()
-
-START_DATE = args.start_date
-END_DATE = args.end_date
-CSV_TEST_FILE = args.csv_test
-
-# ====================================================
-# اتصال به BigQuery
-# ====================================================
-client = bigquery.Client()
+# ============================================================
+# ✅ Configurations
+# ============================================================
+SCOPES = ["https://www.googleapis.com/auth/webmasters.readonly"]
+SITE_URL = "https://bamtabridsazan.com/"
 TABLE_ID = "bamtabridsazan.seo_reports.bamtabridsazan__gsc__raw_data_fullfetch"
+SERVICE_ACCOUNT_FILE = "gcp-key.json"
 
-# ====================================================
-# بارگذاری دیتا به BigQuery (Batch Load)
-# ====================================================
-def upload_to_bq(df: pd.DataFrame):
+# ============================================================
+# ✅ Helper: Unique Key Generator
+# ============================================================
+def generate_unique_key(row):
+    key_parts = [
+        str(row.get("Date", "")),
+        str(row.get("Query", "")),
+        str(row.get("Page", "")),
+        str(row.get("Country", "")),
+        str(row.get("Device", "")),
+        str(row.get("SearchAppearance", "")),
+    ]
+    key_str = "|".join(key_parts)
+    return hashlib.sha256(key_str.encode()).hexdigest()
+
+# ============================================================
+# ✅ BigQuery Connection
+# ============================================================
+def get_bq_client():
+    creds = service_account.Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE)
+    return bigquery.Client(credentials=creds)
+
+# ============================================================
+# ✅ GSC API Connection
+# ============================================================
+def get_gsc_service():
+    creds = service_account.Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=SCOPES)
+    return build("searchconsole", "v1", credentials=creds)
+
+# ============================================================
+# ✅ Fetch Data Function
+# ============================================================
+def fetch_gsc_data(start_date, end_date):
+    service = get_gsc_service()
+    all_data = []
+
+    # ✅ Batchهای ترکیبی
+    DIMENSION_BATCHES = [
+        ["date", "query", "page"],
+        ["date", "query", "country"],
+        ["date", "query", "device"],
+        ["date", "query", "searchAppearance"],
+    ]
+
+    for i, dims in enumerate(DIMENSION_BATCHES, start=1):
+        print(f"[INFO] Batch {i}, dims {dims}: fetching data...")
+
+        request = {
+            "startDate": start_date,
+            "endDate": end_date,
+            "dimensions": dims,
+            "rowLimit": 25000,
+        }
+
+        try:
+            response = service.searchanalytics().query(siteUrl=SITE_URL, body=request).execute()
+            rows = response.get("rows", [])
+            print(f"[INFO] Batch {i}, dims {dims}: fetched {len(rows)} rows")
+
+            for r in rows:
+                keys = r.get("keys", [])
+                row_data = {
+                    "Date": keys[0] if len(keys) > 0 else None,
+                    "Query": keys[1] if len(keys) > 1 else None,
+                    "Page": keys[2] if "page" in dims and len(keys) > 2 else None,
+                    "Country": keys[2] if "country" in dims and len(keys) > 2 else None,
+                    "Device": keys[2] if "device" in dims and len(keys) > 2 else None,
+                    "SearchAppearance": keys[2] if "searchAppearance" in dims and len(keys) > 2 else None,
+                    "Clicks": r.get("clicks", 0),
+                    "Impressions": r.get("impressions", 0),
+                    "CTR": r.get("ctr", 0.0),
+                    "Position": r.get("position", 0.0),
+                }
+                all_data.append(row_data)
+
+        except Exception as e:
+            print(f"[ERROR] Batch {i} failed: {e}")
+            time.sleep(60)
+
+    df = pd.DataFrame(all_data)
+    if not df.empty:
+        df["unique_key"] = df.apply(generate_unique_key, axis=1)
+    return df
+
+# ============================================================
+# ✅ Upload to BigQuery
+# ============================================================
+def upload_to_bq(df):
+    if df.empty:
+        print("[INFO] No new data to upload.")
+        return
+
+    bq = get_bq_client()
+
+    # 🔹 حذف Unknown (در صورت وجود)
+    df.replace("Unknown", None, inplace=True)
+
+    # 🔹 تبدیل تاریخ‌ها
+    df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
+
     job_config = bigquery.LoadJobConfig(
-        write_disposition=bigquery.WriteDisposition.WRITE_APPEND,
-        source_format=bigquery.SourceFormat.CSV,
-        autodetect=True,
-        clustering_fields=["query", "page"],  # کلاسترینگ حفظ شد
+        write_disposition="WRITE_APPEND",
+        schema=[
+            bigquery.SchemaField("Date", "DATE"),
+            bigquery.SchemaField("Query", "STRING"),
+            bigquery.SchemaField("Page", "STRING"),
+            bigquery.SchemaField("Country", "STRING"),
+            bigquery.SchemaField("Device", "STRING"),
+            bigquery.SchemaField("SearchAppearance", "STRING"),
+            bigquery.SchemaField("Clicks", "INTEGER"),
+            bigquery.SchemaField("Impressions", "INTEGER"),
+            bigquery.SchemaField("CTR", "FLOAT"),
+            bigquery.SchemaField("Position", "FLOAT"),
+            bigquery.SchemaField("unique_key", "STRING"),
+        ],
     )
 
-    with pd.io.common.StringIO() as csv_buffer:
-        df.to_csv(csv_buffer, index=False)
-        csv_buffer.seek(0)
-        job = client.load_table_from_file(csv_buffer, TABLE_ID, job_config=job_config)
-        job.result()  # منتظر تکمیل Job
-        print(f"[INFO] Inserted {len(df)} rows to BigQuery (Batch Load).")
+    print(f"[INFO] Uploading {len(df)} rows to BigQuery...")
+    bq.load_table_from_dataframe(df, TABLE_ID, job_config=job_config).result()
+    print(f"[INFO] Inserted {len(df)} rows to BigQuery.")
 
-# ====================================================
-# اجرای batchهای مختلف بدون searchAppearance
-# ====================================================
-def main():
+# ============================================================
+# ✅ Main
+# ============================================================
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--start-date", required=True)
+    parser.add_argument("--end-date", required=True)
+    parser.add_argument("--csv-test", required=False)
+    args = parser.parse_args()
+
+    START_DATE = args.start_date
+    END_DATE = args.end_date
+
     print(f"[INFO] Fetching data from {START_DATE} to {END_DATE}")
 
-    # Batch 1: date + query + page
-    df1 = fetch_gsc_data_batch(START_DATE, END_DATE, dimensions=["date", "query", "page"])
-    print(f"[INFO] Batch 1, dims ['date', 'query', 'page']: fetched {len(df1)} rows")
-    upload_to_bq(df1)
+    df = fetch_gsc_data(START_DATE, END_DATE)
 
-    # Batch 2: date + query + country
-    df2 = fetch_gsc_data_batch(START_DATE, END_DATE, dimensions=["date", "query", "country"])
-    print(f"[INFO] Batch 2, dims ['date', 'query', 'country']: fetched {len(df2)} rows")
-    upload_to_bq(df2)
+    if df.empty:
+        print("[INFO] No data fetched from GSC.")
+        sys.exit(0)
 
-    # Batch 3: date + query + device
-    df3 = fetch_gsc_data_batch(START_DATE, END_DATE, dimensions=["date", "query", "device"])
-    print(f"[INFO] Batch 3, dims ['date', 'query', 'device']: fetched {len(df3)} rows")
-    upload_to_bq(df3)
+    upload_to_bq(df)
 
-    # CSV test output (در صورت نیاز)
-    if CSV_TEST_FILE:
-        df_all = pd.concat([df1, df2, df3], ignore_index=True)
-        df_all.to_csv(CSV_TEST_FILE, index=False)
-        print(f"[INFO] CSV test output written: {CSV_TEST_FILE}")
+    # CSV test optional
+    if args.csv_test:
+        df.to_csv(args.csv_test, index=False)
+        print(f"[INFO] CSV test output written: {args.csv_test}")
 
-    print(f"[INFO] Finished fetching all data. Total rows: {len(df1)+len(df2)+len(df3)}")
-
-# ====================================================
-if __name__ == "__main__":
-    main()
+    print(f"[INFO] Finished fetching all data. Total rows: {len(df)}")
