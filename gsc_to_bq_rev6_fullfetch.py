@@ -1,7 +1,7 @@
 # =================================================
-# FILE: gsc_to_bq_rev6.2_fullfetch.py
-# REV: 6.2
-# PURPOSE: Full Fetch GSC to BigQuery loader with all key dimensions
+# FILE: gsc_to_bq_rev6.3_fullfetch.py
+# REV: 6.3
+# PURPOSE: Full Fetch GSC → BigQuery loader with all key dimensions and searchAppearance fix
 # =================================================
 
 from google.oauth2 import service_account
@@ -22,7 +22,8 @@ BQ_PROJECT = 'bamtabridsazan'
 BQ_DATASET = 'seo_reports'
 BQ_TABLE = 'bamtabridsazan__gsc__raw_data_fullfetch'
 ROW_LIMIT = 25000
-RETRY_DELAY = 60  # seconds in case of timeout
+RETRY_DELAY = 60  # seconds
+MAX_RETRIES = 3   # max retries for API errors
 
 # ---------- ARGUMENT PARSER ----------
 parser = argparse.ArgumentParser(description="GSC to BigQuery Full Fetch Loader")
@@ -32,7 +33,7 @@ parser.add_argument("--debug", action="store_true", help="Enable debug mode (ski
 parser.add_argument("--csv-test", type=str, default="gsc_fullfetch_test.csv", help="CSV test output file")
 args = parser.parse_args()
 
-START_DATE = args.start_date or (datetime.utcnow() - timedelta(days=365)).strftime('%Y-%m-%d')
+START_DATE = args.start_date or (datetime.utcnow() - timedelta(days=365*1)).strftime('%Y-%m-%d')
 END_DATE = args.end_date or datetime.utcnow().strftime('%Y-%m-%d')
 DEBUG_MODE = args.debug
 CSV_TEST_FILE = args.csv_test
@@ -109,7 +110,6 @@ def get_existing_keys():
 
         print(f"[INFO] Retrieved {len(df)} existing keys from BigQuery.", flush=True)
         return set(df['unique_key'].astype(str).tolist())
-
     except Exception as e:
         print(f"[WARN] Failed to fetch existing keys: {e}", flush=True)
         return set()
@@ -136,18 +136,19 @@ def fetch_gsc_data(start_date, end_date):
     existing_keys = get_existing_keys()
     batch_index = 1
 
-    # Dimensions
+    # List of dimensions
     dimensions_list = [
         ['date','query','page'],
         ['date','query'],
         ['date','page'],
         ['date','country'],
         ['date','device'],
-        ['date','searchAppearance']  # Only single dimension
+        ['searchAppearance']  # Single-dimension only
     ]
 
     for dims in dimensions_list:
         start_row = 0
+        retries = 0
         while True:
             request = {
                 'startDate': start_date,
@@ -160,6 +161,10 @@ def fetch_gsc_data(start_date, end_date):
             try:
                 resp = service.searchanalytics().query(siteUrl=SITE_URL, body=request).execute()
             except Exception as e:
+                retries += 1
+                if retries > MAX_RETRIES:
+                    print(f"[ERROR] Max retries reached for dims {dims}. Skipping.", flush=True)
+                    break
                 print(f"[ERROR] Timeout or error: {e}, retrying in {RETRY_DELAY} sec...", flush=True)
                 time.sleep(RETRY_DELAY)
                 continue
@@ -171,12 +176,12 @@ def fetch_gsc_data(start_date, end_date):
             batch_new_rows = []
             for r in rows:
                 row_data = {
-                    'Date': r['keys'][0],
-                    'Query': r['keys'][1] if 'query' in dims and len(r['keys'])>1 else None,
-                    'Page': r['keys'][2] if 'page' in dims and len(r['keys'])>2 else None,
-                    'Country': r['keys'][1] if 'country' in dims and len(r['keys'])>1 else None,
-                    'Device': r['keys'][1] if 'device' in dims and len(r['keys'])>1 else None,
-                    'SearchAppearance': r['keys'][1] if 'searchAppearance' in dims and len(r['keys'])>1 else None,
+                    'Date': r['keys'][0] if len(r['keys']) > 0 else None,
+                    'Query': r['keys'][1] if 'query' in dims and len(r['keys']) > 1 else None,
+                    'Page': r['keys'][2] if 'page' in dims and len(r['keys']) > 2 else None,
+                    'Country': r['keys'][1] if 'country' in dims and len(r['keys']) > 1 else None,
+                    'Device': r['keys'][1] if 'device' in dims and len(r['keys']) > 1 else None,
+                    'SearchAppearance': r['keys'][0] if 'searchAppearance' in dims and len(r['keys']) > 0 else None,
                     'Clicks': r.get('clicks',0),
                     'Impressions': r.get('impressions',0),
                     'CTR': r.get('ctr',0),
@@ -196,7 +201,8 @@ def fetch_gsc_data(start_date, end_date):
             if len(rows) < ROW_LIMIT:
                 break
             start_row += ROW_LIMIT
-            batch_index += 1
+
+        batch_index += 1
 
     # Write CSV for test
     df_all = pd.DataFrame(all_rows)
