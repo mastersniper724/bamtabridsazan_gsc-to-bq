@@ -1,8 +1,9 @@
 # =================================================
 # FILE: gsc_to_bq_searchappearance_fullfetch.py
-# REV: 6.5.5
+# REV: 6.5.6
 # PURPOSE: Full fetch SearchAppearance data from GSC to BigQuery
 #          with duplicate prevention using unique_key
+#          Only fix: ignore --csv-test argument to prevent crash
 # =================================================
 
 from google.oauth2 import service_account
@@ -31,6 +32,9 @@ parser = argparse.ArgumentParser(description="GSC SearchAppearance to BigQuery F
 parser.add_argument("--start-date", type=str, help="Start date YYYY-MM-DD for full fetch")
 parser.add_argument("--end-date", type=str, help="End date YYYY-MM-DD")
 parser.add_argument("--debug", action="store_true", help="Enable debug mode (skip BQ insert)")
+# <<< FIX: ignore any --csv-test argument passed
+parser.add_argument("--csv-test", type=str, help=argparse.SUPPRESS)
+
 args = parser.parse_args()
 
 START_DATE = args.start_date or (datetime.utcnow() - timedelta(days=3)).strftime('%Y-%m-%d')
@@ -110,7 +114,6 @@ def upload_to_bq(df):
     if DEBUG_MODE:
         print(f"[DEBUG] Debug mode ON: skipping insert of {len(df)} rows to BigQuery")
         return
-    # Ensure types match table schema
     df['Clicks'] = pd.to_numeric(df['Clicks'], errors='coerce').fillna(0).astype(int)
     df['Impressions'] = pd.to_numeric(df['Impressions'], errors='coerce').fillna(0).astype(int)
     df['CTR'] = pd.to_numeric(df['CTR'], errors='coerce').fillna(0.0).astype(float)
