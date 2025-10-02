@@ -47,13 +47,28 @@ def get_credentials():
     creds = service_account.Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=["https://www.googleapis.com/auth/webmasters.readonly"])
     return creds
 
+# جایگزین کردن توابع credential — paste این بلوک دقیقاً بجای توابع قدیمی
+
 def get_bq_client():
-    creds = get_credentials()
-    return bigquery.Client(credentials=creds, project=creds.project_id)
+    """
+    برای BigQuery از credential ای استفاده می‌کنیم که scope خاص محدود نشده
+    (تا اگر سرویس اکانت در IAM دسترسی مناسبی دارد، عملیات create_table/insert انجام شود).
+    """
+    # از فایل json سرویس اکانت، credential بدون محدود کردن scope بساز
+    creds_for_bq = service_account.Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE)
+    return bigquery.Client(credentials=creds_for_bq, project=creds_for_bq.project_id)
+
 
 def get_gsc_service():
-    creds = get_credentials()
-    return build("searchconsole", "v1", credentials=creds)
+    """
+    برای GSC سرویس جداگانه با scope وبمستر می‌سازیم (همانند قبل).
+    """
+    creds_for_gsc = service_account.Credentials.from_service_account_file(
+        SERVICE_ACCOUNT_FILE,
+        scopes=["https://www.googleapis.com/auth/webmasters.readonly"]
+    )
+    return build("searchconsole", "v1", credentials=creds_for_gsc)
+
 
 bq_client = get_bq_client()
 table_ref = bq_client.dataset(BQ_DATASET).table(BQ_TABLE)
