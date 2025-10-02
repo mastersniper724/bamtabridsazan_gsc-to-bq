@@ -2,7 +2,7 @@
 # File: gsc_to_bq_rev6.5_fullfetch.py
 # Description: Full Fetch from Google Search Console API
 # Author: MasterSniper
-# Revision: Rev6.5 - 2025-10-02
+# Revision: Rev6.5 - 2025-10-02 (Updated for searchAppearance+date batch)
 # ============================================================
 
 import os
@@ -66,7 +66,7 @@ def fetch_gsc_data(start_date, end_date):
         ["date", "query", "page"],
         ["date", "query", "country"],
         ["date", "query", "device"],
-        ["date", "query", "searchAppearance"],
+        ["date", "searchAppearance"],  # ✅ فقط date+searchAppearance
     ]
 
     for i, dims in enumerate(DIMENSION_BATCHES, start=1):
@@ -88,11 +88,11 @@ def fetch_gsc_data(start_date, end_date):
                 keys = r.get("keys", [])
                 row_data = {
                     "Date": keys[0] if len(keys) > 0 else None,
-                    "Query": keys[1] if len(keys) > 1 else None,
+                    "Query": keys[1] if "query" in dims and len(keys) > 1 else None,
                     "Page": keys[2] if "page" in dims and len(keys) > 2 else None,
                     "Country": keys[2] if "country" in dims and len(keys) > 2 else None,
                     "Device": keys[2] if "device" in dims and len(keys) > 2 else None,
-                    "SearchAppearance": keys[2] if "searchAppearance" in dims and len(keys) > 2 else None,
+                    "SearchAppearance": keys[1] if "searchAppearance" in dims and len(keys) > 1 else None,
                     "Clicks": r.get("clicks", 0),
                     "Impressions": r.get("impressions", 0),
                     "CTR": r.get("ctr", 0.0),
@@ -140,6 +140,7 @@ def upload_to_bq(df):
             bigquery.SchemaField("Position", "FLOAT"),
             bigquery.SchemaField("unique_key", "STRING"),
         ],
+        clustering_fields=["Query", "Page"]  # ✅ کلاستر کردن همان نسخه اصلی
     )
 
     print(f"[INFO] Uploading {len(df)} rows to BigQuery...")
