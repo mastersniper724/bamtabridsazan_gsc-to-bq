@@ -1,7 +1,7 @@
 # =================================================
-# FILE: gsc_to_bq_rev6.7_fullfetch.py
-# REV: 6.7
-# PURPOSE: Full Fetch GSC to BigQuery loader with all key dimensions; searchAppearance fixed
+# FILE: gsc_to_bq_rev6.8_fullfetch.py
+# REV: 6.8
+# PURPOSE: Full Fetch GSC to BigQuery loader without searchAppearance
 # =================================================
 
 from google.oauth2 import service_account
@@ -33,7 +33,7 @@ parser.add_argument("--debug", action="store_true", help="Enable debug mode (ski
 parser.add_argument("--csv-test", type=str, default="gsc_fullfetch_test.csv", help="CSV test output file")
 args = parser.parse_args()
 
-START_DATE = args.start_date or (datetime.utcnow() - timedelta(days=365*1)).strftime('%Y-%m-%d')
+START_DATE = args.start_date or (datetime.utcnow() - timedelta(days=365*1)).strftime('%Y-%m-%d')  # default last 1 year
 END_DATE = args.end_date or datetime.utcnow().strftime('%Y-%m-%d')
 DEBUG_MODE = args.debug
 CSV_TEST_FILE = args.csv_test
@@ -64,7 +64,6 @@ def ensure_table():
             bigquery.SchemaField("Page", "STRING"),
             bigquery.SchemaField("Country", "STRING"),
             bigquery.SchemaField("Device", "STRING"),
-            bigquery.SchemaField("SearchAppearance", "STRING"),
             bigquery.SchemaField("Clicks", "INTEGER"),
             bigquery.SchemaField("Impressions", "INTEGER"),
             bigquery.SchemaField("CTR", "FLOAT"),
@@ -83,7 +82,6 @@ def stable_key(row):
         (row.get('Page') or '').strip().lower().rstrip('/'),
         (row.get('Country') or '').strip().lower(),
         (row.get('Device') or '').strip().lower(),
-        (row.get('SearchAppearance') or '').strip().lower(),
         row.get('Date')[:10] if isinstance(row.get('Date'), str) else row.get('Date').strftime("%Y-%m-%d")
     ]
     s = "|".join(keys)
@@ -115,7 +113,7 @@ def get_existing_keys():
         print(f"[WARN] Failed to fetch existing keys: {e}", flush=True)
         return set()
 
-# ---------- UPLOAD TO BIGQUERY (BATCH LOAD) ----------
+# ---------- UPLOAD TO BIGQUERY ----------
 def upload_to_bq(df):
     if df.empty:
         print("[INFO] No new rows to insert.", flush=True)
@@ -127,7 +125,7 @@ def upload_to_bq(df):
     try:
         job = bq_client.load_table_from_dataframe(df, table_ref)
         job.result()
-        print(f"[INFO] Inserted {len(df)} rows to BigQuery (Batch Load).", flush=True)
+        print(f"[INFO] Inserted {len(df)} rows to BigQuery.", flush=True)
     except Exception as e:
         print(f"[ERROR] Failed to insert rows: {e}", flush=True)
 
@@ -136,20 +134,14 @@ def fetch_gsc_data(start_date, end_date):
     all_rows = []
     existing_keys = get_existing_keys()
     batch_index = 1
-
-    # Define batches
-    batches = [
+    dimensions_list = [
         ['date','query','page'],
         ['date','query','country'],
-        ['date','query','device'],
-        ['date','searchAppearance'],  # only date + searchAppearance
+        ['date','query','device']
     ]
 
-    for dims in batches:
-        print(f"[INFO] Batch {batch_index}, dims {dims}: fetching data...", flush=True)
+    for dims in dimensions_list:
         start_row = 0
-        batch_new_rows = []
-
         while True:
             request = {
                 'startDate': start_date,
@@ -161,7 +153,7 @@ def fetch_gsc_data(start_date, end_date):
             try:
                 resp = service.searchanalytics().query(siteUrl=SITE_URL, body=request).execute()
             except Exception as e:
-                print(f"[ERROR] Batch {batch_index} failed: {e}, retrying in {RETRY_DELAY} sec...", flush=True)
+                print(f"[ERROR] Timeout or error: {e}, retrying in {RETRY_DELAY} sec...", flush=True)
                 time.sleep(RETRY_DELAY)
                 continue
 
@@ -169,6 +161,7 @@ def fetch_gsc_data(start_date, end_date):
             if not rows:
                 break
 
+            batch_new_rows = []
             for r in rows:
                 row_data = {
                     'Date': r['keys'][0],
@@ -176,7 +169,6 @@ def fetch_gsc_data(start_date, end_date):
                     'Page': r['keys'][2] if 'page' in dims else None,
                     'Country': r['keys'][1] if 'country' in dims else None,
                     'Device': r['keys'][1] if 'device' in dims else None,
-                    'SearchAppearance': r['keys'][1] if 'searchAppearance' in dims else None,
                     'Clicks': r.get('clicks',0),
                     'Impressions': r.get('impressions',0),
                     'CTR': r.get('ctr',0),
@@ -187,16 +179,14 @@ def fetch_gsc_data(start_date, end_date):
                     existing_keys.add(key)
                     batch_new_rows.append({**row_data, 'unique_key': key})
 
-            start_row += ROW_LIMIT
+            if batch_new_rows:
+                df_batch = pd.DataFrame(batch_new_rows)
+                upload_to_bq(df_batch)
+                all_rows.extend(batch_new_rows)
+
+            batch_index += 1
             if len(rows) < ROW_LIMIT:
                 break
-
-        if batch_new_rows:
-            df_batch = pd.DataFrame(batch_new_rows)
-            upload_to_bq(df_batch)
-            all_rows.extend(batch_new_rows)
-
-        batch_index += 1
 
     # Write CSV for test
     df_all = pd.DataFrame(all_rows)
