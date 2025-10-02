@@ -45,4 +45,4 @@ jobs:
           GOOGLE_APPLICATION_CREDENTIALS: gcp-key.json
         run: |
           echo "🚀 Running incremental GSC sync..."
-          python gsc_to_bq.py
+          python gsc_to_bq_fullfetch_test.py
