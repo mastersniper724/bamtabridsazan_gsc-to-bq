@@ -1,7 +1,7 @@
 # =================================================
 # FILE: gsc_to_bq_rev6_fullfetch.py
-# REV: 6
-# PURPOSE: Full Fetch GSC to BigQuery loader with all key dimensions, fills missing Country/Device/SearchAppearance
+# REV: 6.1
+# PURPOSE: Full Fetch GSC to BigQuery loader with all key dimensions, safe index handling
 # =================================================
 
 from google.oauth2 import service_account
@@ -22,7 +22,7 @@ BQ_PROJECT = 'bamtabridsazan'
 BQ_DATASET = 'seo_reports'
 BQ_TABLE = 'bamtabridsazan__gsc__raw_data_fullfetch'
 ROW_LIMIT = 25000
-RETRY_DELAY = 60  # seconds
+RETRY_DELAY = 60  # seconds in case of timeout
 
 # ---------- ARGUMENT PARSER ----------
 parser = argparse.ArgumentParser(description="GSC to BigQuery Full Fetch Loader")
@@ -32,7 +32,7 @@ parser.add_argument("--debug", action="store_true", help="Enable debug mode (ski
 parser.add_argument("--csv-test", type=str, default="gsc_fullfetch_test.csv", help="CSV test output file")
 args = parser.parse_args()
 
-START_DATE = args.start_date or (datetime.utcnow() - timedelta(days=365)).strftime('%Y-%m-%d')
+START_DATE = args.start_date or (datetime.utcnow() - timedelta(days=365*1)).strftime('%Y-%m-%d')
 END_DATE = args.end_date or datetime.utcnow().strftime('%Y-%m-%d')
 DEBUG_MODE = args.debug
 CSV_TEST_FILE = args.csv_test
@@ -88,7 +88,7 @@ def stable_key(row):
     s = "|".join(keys)
     return hashlib.sha256(s.encode('utf-8')).hexdigest()
 
-# ---------- FETCH EXISTING KEYS ----------
+# ---------- FETCH EXISTING KEYS FROM BIGQUERY ----------
 def get_existing_keys():
     try:
         query = f"SELECT unique_key FROM `{BQ_PROJECT}.{BQ_DATASET}.{BQ_TABLE}`"
@@ -96,7 +96,7 @@ def get_existing_keys():
             from google.cloud import bigquery_storage
             bqstorage_client = bigquery_storage.BigQueryReadClient()
             use_bqstorage = True
-        except:
+        except Exception:
             bqstorage_client = None
             use_bqstorage = False
 
@@ -107,6 +107,7 @@ def get_existing_keys():
                 warnings.simplefilter("ignore")
                 df = bq_client.query(query).to_dataframe()
 
+        print(f"[INFO] Retrieved {len(df)} existing keys from BigQuery.", flush=True)
         return set(df['unique_key'].astype(str).tolist())
 
     except Exception as e:
@@ -120,7 +121,7 @@ def upload_to_bq(df):
         return
     df['Date'] = pd.to_datetime(df['Date'])
     if DEBUG_MODE:
-        print(f"[DEBUG] Skipping insert of {len(df)} rows to BigQuery")
+        print(f"[DEBUG] Debug mode ON: skipping insert of {len(df)} rows to BigQuery")
         return
     try:
         job = bq_client.load_table_from_dataframe(df, table_ref)
@@ -153,10 +154,11 @@ def fetch_gsc_data(start_date, end_date):
                 'rowLimit': ROW_LIMIT,
                 'startRow': start_row
             }
+
             try:
                 resp = service.searchanalytics().query(siteUrl=SITE_URL, body=request).execute()
             except Exception as e:
-                print(f"[ERROR] Timeout or error: {e}, retrying in {RETRY_DELAY}s", flush=True)
+                print(f"[ERROR] Timeout or error: {e}, retrying in {RETRY_DELAY} sec...", flush=True)
                 time.sleep(RETRY_DELAY)
                 continue
 
@@ -166,38 +168,42 @@ def fetch_gsc_data(start_date, end_date):
 
             batch_new_rows = []
             for r in rows:
+                keys_list = r.get('keys', [])
                 row_data = {
-                    'Date': r['keys'][0],
-                    'Query': r['keys'][1] if 'query' in dims else None,
-                    'Page': r['keys'][2] if 'page' in dims else None,
-                    'Country': r['keys'][1] if 'country' in dims else None,
-                    'Device': r['keys'][1] if 'device' in dims else None,
-                    'SearchAppearance': r['keys'][1] if 'searchAppearance' in dims else None,
+                    'Date': keys_list[0] if len(keys_list) > 0 else None,
+                    'Query': keys_list[1] if 'query' in dims and len(keys_list) > 1 else None,
+                    'Page': keys_list[2] if 'page' in dims and len(keys_list) > 2 else None,
+                    'Country': keys_list[1] if 'country' in dims and len(keys_list) > 1 else None,
+                    'Device': keys_list[1] if 'device' in dims and len(keys_list) > 1 else None,
+                    'SearchAppearance': keys_list[1] if 'searchAppearance' in dims and len(keys_list) > 1 else None,
                     'Clicks': r.get('clicks',0),
                     'Impressions': r.get('impressions',0),
                     'CTR': r.get('ctr',0),
                     'Position': r.get('position',0)
                 }
-                # Fill missing dimensions with placeholders if needed
-                for col in ['Country','Device','SearchAppearance']:
-                    if row_data[col] is None:
-                        row_data[col] = 'unknown'
+
+                # Fill missing values with "unknown" for these dimensions
+                for field in ['Country','Device','SearchAppearance']:
+                    if row_data[field] is None:
+                        row_data[field] = 'unknown'
 
                 key = stable_key(row_data)
                 if key not in existing_keys:
                     existing_keys.add(key)
                     batch_new_rows.append({**row_data, 'unique_key': key})
 
+            print(f"[INFO] Batch {batch_index}, dims {dims}: Fetched {len(rows)} rows, {len(batch_new_rows)} new rows.", flush=True)
             if batch_new_rows:
                 df_batch = pd.DataFrame(batch_new_rows)
                 upload_to_bq(df_batch)
                 all_rows.extend(batch_new_rows)
 
+            batch_index += 1
             if len(rows) < ROW_LIMIT:
                 break
             start_row += ROW_LIMIT
-            batch_index += 1
 
+    # Write CSV for test
     df_all = pd.DataFrame(all_rows)
     df_all.to_csv(CSV_TEST_FILE, index=False)
     print(f"[INFO] CSV test output written: {CSV_TEST_FILE}", flush=True)
