@@ -1,219 +1,123 @@
-#!/usr/bin/env python3
-# ================================================================
-#  Project: BamTabridSazan - GSC Full Fetch System
-#  File: gsc_searchappearance_fullfetch.py
-#  Description: Fetches Search Appearance data from Google Search Console API
-#               and inserts into BigQuery table (raw_data_searchappearance).
-#  Version: Rev 6.5 (SearchAppearance Edition)
-#  Author: MasterSniper (AI Co-Pilot)
-#  Created: 2025-10-03
-#  Last Updated: 2025-10-03
-# ================================================================
-#  ✅ Purpose:
-#    - Extract all searchAppearance performance data (Clicks, Impressions, CTR, Position)
-#      across given date range.
-#    - Store in BigQuery table: bamtabridsazan__gsc__raw_data_searchappearance
-#    - Prevent duplicate rows (using date + searchAppearance as unique key).
-#
-#  ⚙️ Table Schema:
-#    - date (DATE)
-#    - searchAppearance (STRING)
-#    - clicks (FLOAT)
-#    - impressions (FLOAT)
-#    - ctr (FLOAT)
-#    - position (FLOAT)
-#
-#  ⚡ Notes:
-#    - This script is based on rev6 architecture with auto table creation.
-#    - Dimensions allowed: ["searchAppearance", "date"] (UI restriction)
-#    - Other dimensions (query/page/device/country) are not supported.
-#
-#  🧩 Example Usage:
-#    python gsc_searchappearance_fullfetch.py --start-date 2025-09-01 --end-date 2025-09-30
-#    python gsc_searchappearance_fullfetch.py --start-date 2025-09-01 --end-date 2025-09-30 --csv-test gsc_fullfetch_searchappearance_test.csv
-# ================================================================
+# ============================================================
+# File: gsc_to_bq_searchappearance_fullfetch.py
+# Description: Full Fetch for SearchAppearance data from Google Search Console API
+# Author: MasterSniper
+# Revision: Rev6.5.1 (SearchAppearance Edition) - 2025-10-03
+# ============================================================
 
-import argparse
-import csv
 import os
 import sys
-from datetime import datetime, timedelta
-from google.cloud import bigquery
-from googleapiclient.discovery import build
+import time
+import json
+import argparse
+import pandas as pd
 from google.oauth2 import service_account
+from googleapiclient.discovery import build
+from google.cloud import bigquery
 
-# ================================================================
-# 🔧 CONFIGURATION
-# ================================================================
-PROJECT_ID = "bamtabridsazan"
-DATASET_ID = "seo_reports"
-TABLE_ID = "bamtabridsazan__gsc__raw_data_searchappearance"
-FULL_TABLE_ID = f"{PROJECT_ID}.{DATASET_ID}.{TABLE_ID}"
+# ============================================================
+# ✅ Configurations
+# ============================================================
+SCOPES = ["https://www.googleapis.com/auth/webmasters.readonly"]
+SITE_URL = "https://bamtabridsazan.com/"
+TABLE_ID = "bamtabridsazan.seo_reports.bamtabridsazan__gsc__raw_data_searchappearance"
+SERVICE_ACCOUNT_FILE = "gcp-key.json"
 
-# Path to your service account key
-SERVICE_ACCOUNT_FILE = "service_account.json"
+# ============================================================
+# ✅ BigQuery Connection
+# ============================================================
+def get_bq_client():
+    creds = service_account.Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE)
+    return bigquery.Client(credentials=creds)
 
-# ================================================================
-# 🧠 FUNCTIONS
-# ================================================================
-def init_gsc_service():
-    """Initialize Google Search Console API service."""
-    credentials = service_account.Credentials.from_service_account_file(
-        SERVICE_ACCOUNT_FILE, scopes=["https://www.googleapis.com/auth/webmasters.readonly"]
-    )
-    service = build("searchconsole", "v1", credentials=credentials)
-    return service
+# ============================================================
+# ✅ GSC API Connection
+# ============================================================
+def get_gsc_service():
+    creds = service_account.Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=SCOPES)
+    return build("searchconsole", "v1", credentials=creds)
 
-
-def init_bq_client():
-    """Initialize BigQuery client."""
-    credentials = service_account.Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE)
-    client = bigquery.Client(credentials=credentials, project=PROJECT_ID)
-    return client
-
-
-def create_table_if_not_exists(bq_client):
-    """Create the BigQuery table if it doesn't exist."""
-    schema = [
-        bigquery.SchemaField("date", "DATE"),
-        bigquery.SchemaField("searchAppearance", "STRING"),
-        bigquery.SchemaField("clicks", "FLOAT"),
-        bigquery.SchemaField("impressions", "FLOAT"),
-        bigquery.SchemaField("ctr", "FLOAT"),
-        bigquery.SchemaField("position", "FLOAT"),
-    ]
-    table_ref = f"{PROJECT_ID}.{DATASET_ID}.{TABLE_ID}"
+# ============================================================
+# ✅ Ensure Table Exists
+# ============================================================
+def ensure_table():
+    bq = get_bq_client()
     try:
-        bq_client.get_table(table_ref)
-        print(f"✅ Table exists: {table_ref}")
-    except Exception:
-        table = bigquery.Table(table_ref, schema=schema)
-        bq_client.create_table(table)
-        print(f"🆕 Created table: {table_ref}")
+        bq.get_table(TABLE_ID)
+        print(f"[INFO] Table {TABLE_ID} exists.")
+    except:
+        print(f"[INFO] Table {TABLE_ID} not found. Creating...")
+        schema = [
+            bigquery.SchemaField("SearchAppearance", "STRING"),
+            bigquery.SchemaField("Clicks", "INTEGER"),
+            bigquery.SchemaField("Impressions", "INTEGER"),
+            bigquery.SchemaField("CTR", "FLOAT"),
+            bigquery.SchemaField("Position", "FLOAT"),
+        ]
+        table = bigquery.Table(TABLE_ID, schema=schema)
+        bq.create_table(table)
+        print(f"[INFO] Table {TABLE_ID} created.")
 
-
-def fetch_gsc_searchappearance_data(service, site_url, start_date, end_date):
-    """Fetch Search Appearance data with pagination."""
+# ============================================================
+# ✅ Fetch SearchAppearance Data
+# ============================================================
+def fetch_searchappearance_data(start_date, end_date):
+    service = get_gsc_service()
+    request = {
+        "startDate": start_date,
+        "endDate": end_date,
+        "dimensions": ["searchAppearance"],
+        "rowLimit": 25000
+    }
     all_rows = []
-    page_row_limit = 25000
-    start_row = 0
-
-    while True:
-        request = {
-            "startDate": start_date,
-            "endDate": end_date,
-            "dimensions": ["searchAppearance", "date"],
-            "rowLimit": page_row_limit,
-            "startRow": start_row,
-        }
-
-        response = service.searchanalytics().query(siteUrl=site_url, body=request).execute()
+    try:
+        response = service.searchanalytics().query(siteUrl=SITE_URL, body=request).execute()
         rows = response.get("rows", [])
-        if not rows:
-            break
-
-        for row in rows:
-            keys = row.get("keys", [])
-            if len(keys) < 2:
-                continue
-
-            search_appearance = keys[0]
-            date_value = keys[1]
-
-            clicks = row.get("clicks", 0)
-            impressions = row.get("impressions", 0)
-            ctr = row.get("ctr", 0)
-            position = row.get("position", 0)
-
+        for r in rows:
+            keys = r.get("keys", [])
             all_rows.append({
-                "date": date_value,
-                "searchAppearance": search_appearance,
-                "clicks": clicks,
-                "impressions": impressions,
-                "ctr": ctr,
-                "position": position
+                "SearchAppearance": keys[0] if keys else None,
+                "Clicks": r.get("clicks", 0),
+                "Impressions": r.get("impressions", 0),
+                "CTR": r.get("ctr", 0.0),
+                "Position": r.get("position", 0.0),
             })
+        print(f"[INFO] Fetched {len(all_rows)} rows for SearchAppearance.")
+    except Exception as e:
+        print(f"[ERROR] Failed to fetch SearchAppearance data: {e}")
+        sys.exit(1)
+    return pd.DataFrame(all_rows)
 
-        start_row += len(rows)
-        print(f"📦 Fetched {len(rows)} rows (total: {start_row})")
-
-        if len(rows) < page_row_limit:
-            break
-
-    print(f"✅ Total rows fetched: {len(all_rows)}")
-    return all_rows
-
-
-def insert_to_bigquery(bq_client, data):
-    """Insert data into BigQuery with duplicate check."""
-    if not data:
-        print("⚠️ No data to insert.")
+# ============================================================
+# ✅ Upload to BigQuery
+# ============================================================
+def upload_to_bq(df):
+    if df.empty:
+        print("[INFO] No new data to upload.")
         return
+    bq = get_bq_client()
+    try:
+        job = bq.load_table_from_dataframe(df, TABLE_ID)
+        job.result()
+        print(f"[INFO] Inserted {len(df)} rows to BigQuery.")
+    except Exception as e:
+        print(f"[ERROR] Failed to insert rows: {e}")
+        sys.exit(1)
 
-    table = bq_client.get_table(FULL_TABLE_ID)
-    unique_rows = []
-
-    # Fetch existing unique keys
-    query = f"""
-        SELECT CONCAT(CAST(date AS STRING), '_', searchAppearance) as unique_key
-        FROM `{FULL_TABLE_ID}`
-        WHERE date BETWEEN '{min([r['date'] for r in data])}' AND '{max([r['date'] for r in data])}'
-    """
-    existing_keys = {row["unique_key"] for row in bq_client.query(query).result()}
-
-    for r in data:
-        key = f"{r['date']}_{r['searchAppearance']}"
-        if key not in existing_keys:
-            unique_rows.append(r)
-
-    if not unique_rows:
-        print("🟡 All rows already exist. Nothing new to insert.")
-        return
-
-    errors = bq_client.insert_rows_json(table, unique_rows)
-    if errors:
-        print("❌ Errors while inserting:", errors)
-    else:
-        print(f"✅ Inserted {len(unique_rows)} new rows.")
-
-
-def save_to_csv(data, filename):
-    """Save output to CSV for testing."""
-    keys = ["date", "searchAppearance", "clicks", "impressions", "ctr", "position"]
-    with open(filename, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=keys)
-        writer.writeheader()
-        writer.writerows(data)
-    print(f"💾 CSV saved: {filename}")
-
-
-# ================================================================
-# 🚀 MAIN
-# ================================================================
+# ============================================================
+# ✅ Main
+# ============================================================
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--start-date", required=True, help="Start date (YYYY-MM-DD)")
-    parser.add_argument("--end-date", required=True, help="End date (YYYY-MM-DD)")
-    parser.add_argument("--csv-test", required=False, help="Optional CSV filename for test output")
-    parser.add_argument("--debug", action="store_true", help="Enable debug mode")
+    parser.add_argument("--start-date", required=True)
+    parser.add_argument("--end-date", required=True)
     args = parser.parse_args()
 
-    start_date = args.start_date
-    end_date = args.end_date
+    START_DATE = args.start_date
+    END_DATE = args.end_date
 
-    # 🔹 Init clients
-    bq_client = init_bq_client()
-    gsc_service = init_gsc_service()
-    create_table_if_not_exists(bq_client)
-
-    # 🔹 Replace with your verified site
-    SITE_URL = "https://bamtabridsazan.com/"
-
-    print(f"🚀 Fetching SearchAppearance data from {start_date} to {end_date} ...")
-    data = fetch_gsc_searchappearance_data(gsc_service, SITE_URL, start_date, end_date)
-
-    if args.csv_test:
-        save_to_csv(data, args.csv_test)
-
-    insert_to_bigquery(bq_client, data)
-    print("🎯 Done.")
+    print(f"[INFO] Fetching SearchAppearance data from {START_DATE} to {END_DATE}")
+    ensure_table()
+    df = fetch_searchappearance_data(START_DATE, END_DATE)
+    upload_to_bq(df)
+    print(f"[INFO] Finished fetching all SearchAppearance data. Total rows: {len(df)}")
