@@ -1,7 +1,7 @@
 # =================================================
-# FILE: gsc_to_bq_rev6.6_batchload_fixed.py
-# REV: 6.6-BatchLoad-Fixed
-# PURPOSE: Full Fetch GSC → BigQuery loader (Batch Load) with corrected SearchAppearance batch
+# FILE: gsc_to_bq_rev6.7_fullfetch.py
+# REV: 6.7
+# PURPOSE: Full Fetch GSC to BigQuery loader with all key dimensions; searchAppearance fixed
 # =================================================
 
 from google.oauth2 import service_account
@@ -23,17 +23,17 @@ BQ_PROJECT = 'bamtabridsazan'
 BQ_DATASET = 'seo_reports'
 BQ_TABLE = 'bamtabridsazan__gsc__raw_data_fullfetch'
 ROW_LIMIT = 25000
-RETRY_DELAY = 60  # seconds
+RETRY_DELAY = 60  # seconds in case of timeout
 
 # ---------- ARGUMENT PARSER ----------
-parser = argparse.ArgumentParser(description="GSC to BigQuery Full Fetch Loader (Batch Load Fixed)")
+parser = argparse.ArgumentParser(description="GSC to BigQuery Full Fetch Loader")
 parser.add_argument("--start-date", type=str, help="Start date YYYY-MM-DD for full fetch")
 parser.add_argument("--end-date", type=str, help="End date YYYY-MM-DD")
 parser.add_argument("--debug", action="store_true", help="Enable debug mode (skip BQ insert)")
 parser.add_argument("--csv-test", type=str, default="gsc_fullfetch_test.csv", help="CSV test output file")
 args = parser.parse_args()
 
-START_DATE = args.start_date or (datetime.utcnow() - timedelta(days=365)).strftime('%Y-%m-%d')
+START_DATE = args.start_date or (datetime.utcnow() - timedelta(days=365*1)).strftime('%Y-%m-%d')
 END_DATE = args.end_date or datetime.utcnow().strftime('%Y-%m-%d')
 DEBUG_MODE = args.debug
 CSV_TEST_FILE = args.csv_test
@@ -89,7 +89,7 @@ def stable_key(row):
     s = "|".join(keys)
     return hashlib.sha256(s.encode('utf-8')).hexdigest()
 
-# ---------- FETCH EXISTING KEYS ----------
+# ---------- FETCH EXISTING KEYS FROM BIGQUERY ----------
 def get_existing_keys():
     try:
         query = f"SELECT unique_key FROM `{BQ_PROJECT}.{BQ_DATASET}.{BQ_TABLE}`"
@@ -115,7 +115,7 @@ def get_existing_keys():
         print(f"[WARN] Failed to fetch existing keys: {e}", flush=True)
         return set()
 
-# ---------- UPLOAD TO BIGQUERY ----------
+# ---------- UPLOAD TO BIGQUERY (BATCH LOAD) ----------
 def upload_to_bq(df):
     if df.empty:
         print("[INFO] No new rows to insert.", flush=True)
@@ -137,17 +137,19 @@ def fetch_gsc_data(start_date, end_date):
     existing_keys = get_existing_keys()
     batch_index = 1
 
-    # ---------- DIMENSIONS ----------
+    # Define batches
     batches = [
         ['date','query','page'],
         ['date','query','country'],
         ['date','query','device'],
-        ['date','page','searchAppearance']  # FIXED: searchAppearance batch uses page instead of query
+        ['date','searchAppearance'],  # only date + searchAppearance
     ]
 
     for dims in batches:
         print(f"[INFO] Batch {batch_index}, dims {dims}: fetching data...", flush=True)
         start_row = 0
+        batch_new_rows = []
+
         while True:
             request = {
                 'startDate': start_date,
@@ -167,7 +169,6 @@ def fetch_gsc_data(start_date, end_date):
             if not rows:
                 break
 
-            batch_new_rows = []
             for r in rows:
                 row_data = {
                     'Date': r['keys'][0],
@@ -186,17 +187,18 @@ def fetch_gsc_data(start_date, end_date):
                     existing_keys.add(key)
                     batch_new_rows.append({**row_data, 'unique_key': key})
 
+            start_row += ROW_LIMIT
+            if len(rows) < ROW_LIMIT:
+                break
+
+        if batch_new_rows:
             df_batch = pd.DataFrame(batch_new_rows)
             upload_to_bq(df_batch)
             all_rows.extend(batch_new_rows)
 
-            if len(rows) < ROW_LIMIT:
-                break
-            start_row += ROW_LIMIT
-
         batch_index += 1
 
-    # Write CSV test file
+    # Write CSV for test
     df_all = pd.DataFrame(all_rows)
     df_all.to_csv(CSV_TEST_FILE, index=False)
     print(f"[INFO] CSV test output written: {CSV_TEST_FILE}", flush=True)
