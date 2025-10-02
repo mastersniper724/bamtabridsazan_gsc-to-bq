@@ -1,7 +1,7 @@
 # =================================================
-# FILE: gsc_to_bq_rev6.6_batchload.py
-# REV: 6.6-BatchLoad
-# PURPOSE: Full Fetch GSC to BigQuery loader with Batch Load for all key dimensions
+# FILE: gsc_to_bq_rev6.6_batchload_fixed.py
+# REV: 6.6-BatchLoad-Fixed
+# PURPOSE: Full Fetch GSC → BigQuery loader (Batch Load) with corrected SearchAppearance batch
 # =================================================
 
 from google.oauth2 import service_account
@@ -26,11 +26,11 @@ ROW_LIMIT = 25000
 RETRY_DELAY = 60  # seconds
 
 # ---------- ARGUMENT PARSER ----------
-parser = argparse.ArgumentParser(description="GSC to BigQuery Full Fetch Batch Loader")
+parser = argparse.ArgumentParser(description="GSC to BigQuery Full Fetch Loader (Batch Load Fixed)")
 parser.add_argument("--start-date", type=str, help="Start date YYYY-MM-DD for full fetch")
 parser.add_argument("--end-date", type=str, help="End date YYYY-MM-DD")
 parser.add_argument("--debug", action="store_true", help="Enable debug mode (skip BQ insert)")
-parser.add_argument("--csv-test", type=str, default="gsc_fullfetch_batch_test.csv", help="CSV test output file")
+parser.add_argument("--csv-test", type=str, default="gsc_fullfetch_test.csv", help="CSV test output file")
 args = parser.parse_args()
 
 START_DATE = args.start_date or (datetime.utcnow() - timedelta(days=365)).strftime('%Y-%m-%d')
@@ -110,12 +110,13 @@ def get_existing_keys():
 
         print(f"[INFO] Retrieved {len(df)} existing keys from BigQuery.", flush=True)
         return set(df['unique_key'].astype(str).tolist())
+
     except Exception as e:
         print(f"[WARN] Failed to fetch existing keys: {e}", flush=True)
         return set()
 
-# ---------- UPLOAD TO BIGQUERY (BATCH) ----------
-def upload_to_bq_batch(df):
+# ---------- UPLOAD TO BIGQUERY ----------
+def upload_to_bq(df):
     if df.empty:
         print("[INFO] No new rows to insert.", flush=True)
         return
@@ -128,24 +129,24 @@ def upload_to_bq_batch(df):
         job.result()
         print(f"[INFO] Inserted {len(df)} rows to BigQuery (Batch Load).", flush=True)
     except Exception as e:
-        print(f"[ERROR] Failed to insert batch: {e}", flush=True)
+        print(f"[ERROR] Failed to insert rows: {e}", flush=True)
 
 # ---------- FETCH GSC DATA ----------
 def fetch_gsc_data(start_date, end_date):
     all_rows = []
     existing_keys = get_existing_keys()
     batch_index = 1
-    # Five batches: ['date','query','page'], ['date','query','country'], ['date','query','device'], ['date','query','searchAppearance'], ['date','page','searchAppearance']
-    dimensions_batches = [
+
+    # ---------- DIMENSIONS ----------
+    batches = [
         ['date','query','page'],
         ['date','query','country'],
         ['date','query','device'],
-        ['date','query','searchAppearance'],
-        ['date','page','searchAppearance']
+        ['date','page','searchAppearance']  # FIXED: searchAppearance batch uses page instead of query
     ]
 
-    for dims in dimensions_batches:
-        print(f"[INFO] Batch {batch_index}, dims {dims}: fetching data...")
+    for dims in batches:
+        print(f"[INFO] Batch {batch_index}, dims {dims}: fetching data...", flush=True)
         start_row = 0
         while True:
             request = {
@@ -185,10 +186,9 @@ def fetch_gsc_data(start_date, end_date):
                     existing_keys.add(key)
                     batch_new_rows.append({**row_data, 'unique_key': key})
 
-            if batch_new_rows:
-                df_batch = pd.DataFrame(batch_new_rows)
-                upload_to_bq_batch(df_batch)
-                all_rows.extend(batch_new_rows)
+            df_batch = pd.DataFrame(batch_new_rows)
+            upload_to_bq(df_batch)
+            all_rows.extend(batch_new_rows)
 
             if len(rows) < ROW_LIMIT:
                 break
@@ -196,6 +196,7 @@ def fetch_gsc_data(start_date, end_date):
 
         batch_index += 1
 
+    # Write CSV test file
     df_all = pd.DataFrame(all_rows)
     df_all.to_csv(CSV_TEST_FILE, index=False)
     print(f"[INFO] CSV test output written: {CSV_TEST_FILE}", flush=True)
@@ -204,6 +205,5 @@ def fetch_gsc_data(start_date, end_date):
 # ---------- MAIN ----------
 if __name__ == "__main__":
     ensure_table()
-    print(f"[INFO] Fetching data from {START_DATE} to {END_DATE}", flush=True)
     df = fetch_gsc_data(START_DATE, END_DATE)
     print(f"[INFO] Finished fetching all data. Total rows: {len(df)}", flush=True)
