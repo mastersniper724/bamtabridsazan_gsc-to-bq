@@ -1,0 +1,55 @@
+# =================================================
+# FILE: .github/workflows/gsc_fullfetch.yml
+# PURPOSE: Full Fetch GSC Loader via Python (rev.5)
+# =================================================
+name: GSC Full Fetch Loader
+
+on:
+  workflow_dispatch:
+    inputs:
+      start_date:
+        description: 'Start date YYYY-MM-DD'
+        required: false
+        default: ''
+      end_date:
+        description: 'End date YYYY-MM-DD'
+        required: false
+        default: ''
+      debug:
+        description: 'Debug mode (skip BQ insert)'
+        required: false
+        default: 'true'
+
+jobs:
+  fullfetch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install google-auth google-auth-oauthlib google-auth-httplib2 google-api-python-client pandas google-cloud-bigquery
+
+      - name: Set Service Account
+        run: echo "${{ secrets.GCP_SA_JSON }}" > $GITHUB_WORKSPACE/gcp-key.json
+
+      - name: Run Full Fetch Python
+        run: |
+          python gsc_to_bq_rev5_fullfetch.py \
+            --start-date "${{ github.event.inputs.start_date }}" \
+            --end-date "${{ github.event.inputs.end_date }}" \
+            --debug ${{ github.event.inputs.debug }} \
+            --csv-test "gsc_fullfetch_test_${{ github.run_id }}.csv"
+
+      - name: Upload CSV Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: gsc_fullfetch_test
+          path: gsc_fullfetch_test_${{ github.run_id }}.csv
