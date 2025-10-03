@@ -3,7 +3,7 @@ name: GSC Full Fetch → CSV Artifact
 on:
   workflow_dispatch:
   schedule:
-    - cron: "30 22 * * *"  # 2:00 AM Tehran time
+#    - cron: "30 22 * * *"  # 2:00 AM Tehran time
 
 jobs:
   gsc-fullfetch:
