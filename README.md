@@ -1,4 +1,4 @@
-	        filename  															Version					Workflow																					Versoin		Description
+	        filename  			Version					Workflow		Versoin		Description
  				gsc_to_bq.py															REV.4						gsc-to-bq.yml	(No Duplicate)											----			Incremental injection to BQ for last 3 Days
 				gsc_to_bq_rev3_full.py										REV.3						gsc-to-bq.yml	(No Duplicate)											----			GSC Full (16Months) fetch
 				gsc_to_bq_rev6_fullfetch.py								Rev6.5 (final)	gsc_fullfetch.yml (No Duplicate)									Rev.2			GSC Fullfetch (without searchAppearance)
