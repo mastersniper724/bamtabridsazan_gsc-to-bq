@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 # ============================================================
 # File: gsc_to_bq_rev6_fullfetch.py
-# Revision: Rev6.6.1 — sitewide batch ["date"] added (__SITE_TOTAL__ placeholder)
+# Revision: Rev6.6.2 — sitewide batch ["date"] added (__SITE_TOTAL__ placeholder)
 # Purpose: Full fetch from GSC -> BigQuery with duplicate prevention and sitewide total batch
 # ============================================================
 
@@ -302,37 +302,36 @@ def fetch_sitewide_batch(start_date, end_date):
     date_range = pd.date_range(start=start_date, end=end_date)
     for dt in date_range:
         date_str = dt.strftime("%Y-%m-%d")
+        # فقط برای تاریخ‌هایی که هیچ row واقعی نداشته‌اند
+        if not any(row["Date"] == date_str for row in all_new_rows):
+            placeholder_row = {
+                "Date": date_str,
+                "Query": "__SITE_TOTAL__",
+                "Page": "__SITE_TOTAL__",
+                "Country": None,
+                "Device": None,
+                "Clicks": None,
+                "Impressions": None,
+                "CTR": None,
+                "Position": None,
+            }
+            unique_key = generate_unique_key(placeholder_row)
+            if unique_key not in existing_keys:
+                existing_keys.add(unique_key)
+                placeholder_row["unique_key"] = unique_key
+                all_new_rows.append(placeholder_row)
+                print(f"[INFO] Sitewide batch: adding placeholder for missing date {date_str}", flush=True)
 
-        # Check if already added by actual GSC fetch
-        existing_keys_for_date = [
-            row["unique_key"] for row in all_new_rows if row["Date"] == date_str
-        ]
-        placeholder_row = {
-            "Date": date_str,
-            "Query": "__SITE_TOTAL__",
-            "Page": "__SITE_TOTAL__",
-            "Country": None,
-            "Device": None,
-            "Clicks": None,
-            "Impressions": None,
-            "CTR": None,
-            "Position": None,
-        }
-        unique_key = generate_unique_key(placeholder_row)
-        if unique_key not in existing_keys and unique_key not in existing_keys_for_date:
-            existing_keys.add(unique_key)
-            placeholder_row["unique_key"] = unique_key
-            all_new_rows.append(placeholder_row)
-            print(f"[INFO] Sitewide batch: adding placeholder for missing date {date_str}", flush=True)
-
-    # Insert all new placeholders at once
-    if all_new_rows:
-        df_sitewide = pd.DataFrame(all_new_rows)
-        inserted = upload_to_bq(df_sitewide)
+    # Insert all placeholders at once (داده واقعی قبلاً Insert شده)
+    placeholders_only = [row for row in all_new_rows if row["Clicks"] is None]
+    if placeholders_only:
+        df_placeholders = pd.DataFrame(placeholders_only)
+        inserted = upload_to_bq(df_placeholders)
         total_new_count += inserted
 
     print(f"[INFO] Sitewide batch done: {total_new_count} new rows inserted.", flush=True)
     return pd.DataFrame(all_new_rows), total_new_count
+
 
 
 # ---------- MAIN ----------
