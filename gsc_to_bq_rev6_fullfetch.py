@@ -239,6 +239,7 @@ def fetch_sitewide_batch(start_date, end_date):
     all_new_rows = []
     total_new_count = 0
 
+    # ---------- Step 1: fetch actual GSC rows for ['date'] ----------
     start_row = 0
     batch_index = 1
     while True:
@@ -297,8 +298,42 @@ def fetch_sitewide_batch(start_date, end_date):
             break
         start_row += len(rows)
 
+    # ---------- Step 2: add placeholder rows for missing dates ----------
+    date_range = pd.date_range(start=start_date, end=end_date)
+    for dt in date_range:
+        date_str = dt.strftime("%Y-%m-%d")
+
+        # Check if already added by actual GSC fetch
+        existing_keys_for_date = [
+            row["unique_key"] for row in all_new_rows if row["Date"] == date_str
+        ]
+        placeholder_row = {
+            "Date": date_str,
+            "Query": "__SITE_TOTAL__",
+            "Page": "__SITE_TOTAL__",
+            "Country": None,
+            "Device": None,
+            "Clicks": None,
+            "Impressions": None,
+            "CTR": None,
+            "Position": None,
+        }
+        unique_key = generate_unique_key(placeholder_row)
+        if unique_key not in existing_keys and unique_key not in existing_keys_for_date:
+            existing_keys.add(unique_key)
+            placeholder_row["unique_key"] = unique_key
+            all_new_rows.append(placeholder_row)
+            print(f"[INFO] Sitewide batch: adding placeholder for missing date {date_str}", flush=True)
+
+    # Insert all new placeholders at once
+    if all_new_rows:
+        df_sitewide = pd.DataFrame(all_new_rows)
+        inserted = upload_to_bq(df_sitewide)
+        total_new_count += inserted
+
     print(f"[INFO] Sitewide batch done: {total_new_count} new rows inserted.", flush=True)
     return pd.DataFrame(all_new_rows), total_new_count
+
 
 # ---------- MAIN ----------
 def main():
