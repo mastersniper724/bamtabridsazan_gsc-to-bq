@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 # ============================================================
 # File: gsc_to_bq_rev6_fullfetch.py
-# Revision: Rev6.6.2 — sitewide batch ["date"] added (__SITE_TOTAL__ placeholder)
+# Revision: Rev6.6.3 — Batch 5 = Date + Page, Batch 6 = Date + Query added
 # Purpose: Full fetch from GSC -> BigQuery with duplicate prevention and sitewide total batch
 # ============================================================
 
@@ -161,6 +161,8 @@ def fetch_gsc_data(start_date, end_date):
         ["date", "query", "page"],
         ["date", "query", "country"],
         ["date", "query", "device"],
+        ["date", "page"],               # Batch 5 جدید
+        ["date", "query"],              # Batch 6 جدید
     ]
 
     for i, dims in enumerate(DIMENSION_BATCHES, start=1):
