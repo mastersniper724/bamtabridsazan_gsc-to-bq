@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 # ============================================================
 # File: gsc_to_bq_rev6_fullfetch.py
-# Revision: Rev6.6 — sitewide batch ["date"] added (__SITE_TOTAL__ placeholder)
+# Revision: Rev6.6.1 — sitewide batch ["date"] added (__SITE_TOTAL__ placeholder)
 # Purpose: Full fetch from GSC -> BigQuery with duplicate prevention and sitewide total batch
 # ============================================================
 
