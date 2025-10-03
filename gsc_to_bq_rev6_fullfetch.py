@@ -2,8 +2,8 @@
 # -*- coding: utf-8 -*-
 # ============================================================
 # File: gsc_to_bq_rev6_fullfetch.py
-# Revision: Rev6.5 (final) — duplicate prevention restored, searchAppearance removed
-# Purpose: Full fetch from GSC -> BigQuery with duplicate prevention and --csv-test support
+# Revision: Rev6.6 — sitewide batch ["date"] added (__SITE_TOTAL__ placeholder)
+# Purpose: Full fetch from GSC -> BigQuery with duplicate prevention and sitewide total batch
 # ============================================================
 
 import os
@@ -25,11 +25,10 @@ BQ_DATASET = "seo_reports"
 BQ_TABLE = "bamtabridsazan__gsc__raw_data_fullfetch"
 ROW_LIMIT = 25000
 RETRY_DELAY = 60  # seconds
-# SERVICE_ACCOUNT_FILE can be provided via env SERVICE_ACCOUNT_FILE or defaults to gcp-key.json
 SERVICE_ACCOUNT_FILE = os.environ.get("SERVICE_ACCOUNT_FILE", "gcp-key.json")
 
 # ---------- ARGUMENTS ----------
-parser = argparse.ArgumentParser(description="GSC to BigQuery Full Fetch (Rev6.5 final)")
+parser = argparse.ArgumentParser(description="GSC to BigQuery Full Fetch (Rev6.6)")
 parser.add_argument("--start-date", required=True, help="Start date YYYY-MM-DD")
 parser.add_argument("--end-date", required=True, help="End date YYYY-MM-DD")
 parser.add_argument("--debug", action="store_true", help="Debug: skip BQ insert (still creates CSV if requested)")
@@ -43,32 +42,19 @@ CSV_TEST_FILE = args.csv_test
 
 # ---------- CLIENTS ----------
 def get_credentials():
-    # use service account json file path (workflow writes gcp-key.json)
     creds = service_account.Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=["https://www.googleapis.com/auth/webmasters.readonly"])
     return creds
 
-# جایگزین کردن توابع credential — paste این بلوک دقیقاً بجای توابع قدیمی
-
 def get_bq_client():
-    """
-    برای BigQuery از credential ای استفاده می‌کنیم که scope خاص محدود نشده
-    (تا اگر سرویس اکانت در IAM دسترسی مناسبی دارد، عملیات create_table/insert انجام شود).
-    """
-    # از فایل json سرویس اکانت، credential بدون محدود کردن scope بساز
     creds_for_bq = service_account.Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE)
     return bigquery.Client(credentials=creds_for_bq, project=creds_for_bq.project_id)
 
-
 def get_gsc_service():
-    """
-    برای GSC سرویس جداگانه با scope وبمستر می‌سازیم (همانند قبل).
-    """
     creds_for_gsc = service_account.Credentials.from_service_account_file(
         SERVICE_ACCOUNT_FILE,
         scopes=["https://www.googleapis.com/auth/webmasters.readonly"]
     )
     return build("searchconsole", "v1", credentials=creds_for_gsc)
-
 
 bq_client = get_bq_client()
 table_ref = bq_client.dataset(BQ_DATASET).table(BQ_TABLE)
@@ -93,14 +79,12 @@ def ensure_table():
             bigquery.SchemaField("unique_key", "STRING"),
         ]
         table = bigquery.Table(table_ref, schema=schema)
-        # keep clustering similar to previous versions
         table.clustering_fields = ["Query", "Page"]
         bq_client.create_table(table)
         print(f"[INFO] Table {BQ_TABLE} created.", flush=True)
 
-# ---------- UNIQUE KEY (duplicate prevention) ----------
+# ---------- UNIQUE KEY ----------
 def generate_unique_key(row):
-    # compose key from date, query, page, country, device (searchAppearance intentionally excluded)
     q = (row.get("Query") or "").strip().lower()
     p = (row.get("Page") or "").strip().lower().rstrip("/")
     c = (row.get("Country") or "").strip().lower()
@@ -115,11 +99,10 @@ def generate_unique_key(row):
     key_str = "|".join([date, q, p, c, d])
     return hashlib.sha256(key_str.encode("utf-8")).hexdigest()
 
-# ---------- GET EXISTING KEYS FROM BQ ----------
+# ---------- GET EXISTING KEYS ----------
 def get_existing_keys():
     try:
         query = f"SELECT unique_key FROM `{BQ_PROJECT}.{BQ_DATASET}.{BQ_TABLE}`"
-        # try BigQuery Storage client for faster download
         try:
             from google.cloud import bigquery_storage
             bqstorage_client = bigquery_storage.BigQueryReadClient()
@@ -134,12 +117,11 @@ def get_existing_keys():
         print(f"[WARN] Failed to fetch existing keys: {e}", flush=True)
         return set()
 
-# ---------- UPLOAD TO BIGQUERY (Batch Load) ----------
+# ---------- UPLOAD TO BIGQUERY ----------
 def upload_to_bq(df):
     if df.empty:
         print("[INFO] No new rows to insert.", flush=True)
         return 0
-    # ensure Date column is datetime
     df["Date"] = pd.to_datetime(df["Date"])
     if DEBUG_MODE:
         print(f"[DEBUG] Debug mode ON: skipping insert of {len(df)} rows to BigQuery", flush=True)
@@ -168,14 +150,13 @@ def upload_to_bq(df):
         print(f"[ERROR] Failed to insert rows: {e}", flush=True)
         return 0
 
-# ---------- FETCH GSC DATA (three valid batches only) ----------
+# ---------- FETCH GSC DATA ----------
 def fetch_gsc_data(start_date, end_date):
     service = get_gsc_service()
     existing_keys = get_existing_keys()
     all_new_rows = []
     total_new_count = 0
 
-    # batches we keep (searchAppearance removed completely)
     DIMENSION_BATCHES = [
         ["date", "query", "page"],
         ["date", "query", "country"],
@@ -209,10 +190,8 @@ def fetch_gsc_data(start_date, end_date):
             batch_new = []
             for r in rows:
                 keys = r.get("keys", [])
-                # mapping keys safely by checking dims
                 date = keys[0] if len(keys) > 0 else None
                 query = keys[1] if ("query" in dims and len(keys) > 1) else None
-                # dimension at index 2 differs by batch meaning: page/country/device
                 third = keys[2] if len(keys) > 2 else None
                 page = third if "page" in dims else None
                 country = third if "country" in dims else None
@@ -238,23 +217,88 @@ def fetch_gsc_data(start_date, end_date):
 
             print(f"[INFO] Batch {i} (page {batch_index}): Fetched {len(rows)} rows, {len(batch_new)} new rows.", flush=True)
 
-            # if have new rows -> upload
             if batch_new:
                 df_batch = pd.DataFrame(batch_new)
                 inserted = upload_to_bq(df_batch)
                 total_new_count += inserted
-                # also keep a copy for optional CSV output
                 all_new_rows.extend(batch_new)
 
             batch_index += 1
-            # pagination: if fewer than ROW_LIMIT then done
             if len(rows) < ROW_LIMIT:
                 break
             start_row += len(rows)
 
-    # return DataFrame of all new rows (for CSV or reporting)
     df_all_new = pd.DataFrame(all_new_rows)
     return df_all_new, total_new_count
+
+# ---------- NEW: FETCH SITEWIDE BATCH (ISOLATED) ----------
+def fetch_sitewide_batch(start_date, end_date):
+    print("[INFO] Running sitewide batch ['date']...", flush=True)
+    service = get_gsc_service()
+    existing_keys = get_existing_keys()
+    all_new_rows = []
+    total_new_count = 0
+
+    start_row = 0
+    batch_index = 1
+    while True:
+        request = {
+            "startDate": start_date,
+            "endDate": end_date,
+            "dimensions": ["date"],
+            "rowLimit": ROW_LIMIT,
+            "startRow": start_row,
+        }
+        try:
+            resp = service.searchanalytics().query(siteUrl=SITE_URL, body=request).execute()
+        except Exception as e:
+            print(f"[ERROR] Sitewide batch error: {e}, retrying in {RETRY_DELAY} sec...", flush=True)
+            time.sleep(RETRY_DELAY)
+            continue
+
+        rows = resp.get("rows", [])
+        if not rows:
+            print(f"[INFO] Sitewide batch: no more rows (startRow={start_row}).", flush=True)
+            break
+
+        batch_new = []
+        for r in rows:
+            keys = r.get("keys", [])
+            date = keys[0] if len(keys) > 0 else None
+
+            row = {
+                "Date": date,
+                "Query": "__SITE_TOTAL__",
+                "Page": "__SITE_TOTAL__",
+                "Country": None,
+                "Device": None,
+                "Clicks": r.get("clicks", 0),
+                "Impressions": r.get("impressions", 0),
+                "CTR": r.get("ctr", 0.0),
+                "Position": r.get("position", 0.0),
+            }
+
+            unique_key = generate_unique_key(row)
+            if unique_key not in existing_keys:
+                existing_keys.add(unique_key)
+                row["unique_key"] = unique_key
+                batch_new.append(row)
+
+        print(f"[INFO] Sitewide batch page {batch_index}: fetched {len(rows)} rows, {len(batch_new)} new.", flush=True)
+
+        if batch_new:
+            df_batch = pd.DataFrame(batch_new)
+            inserted = upload_to_bq(df_batch)
+            total_new_count += inserted
+            all_new_rows.extend(batch_new)
+
+        batch_index += 1
+        if len(rows) < ROW_LIMIT:
+            break
+        start_row += len(rows)
+
+    print(f"[INFO] Sitewide batch done: {total_new_count} new rows inserted.", flush=True)
+    return pd.DataFrame(all_new_rows), total_new_count
 
 # ---------- MAIN ----------
 def main():
@@ -262,16 +306,20 @@ def main():
     print(f"[INFO] Fetching data from {START_DATE} to {END_DATE}", flush=True)
     df_new, total_inserted = fetch_gsc_data(START_DATE, END_DATE)
 
-    if df_new.empty:
+    # --- run isolated sitewide batch ---
+    df_site, total_site = fetch_sitewide_batch(START_DATE, END_DATE)
+
+    total_all = total_inserted + total_site
+
+    if df_new.empty and df_site.empty:
         print("[INFO] No new rows fetched from GSC.", flush=True)
     else:
-        print(f"[INFO] Total new rows fetched: {len(df_new)}", flush=True)
-        print(f"[INFO] Total rows inserted to BigQuery: {total_inserted}", flush=True)
+        print(f"[INFO] Total new rows fetched: {total_all}", flush=True)
 
-    # optional CSV output (useful for debug / artifact)
     if CSV_TEST_FILE:
         try:
-            df_new.to_csv(CSV_TEST_FILE, index=False)
+            df_combined = pd.concat([df_new, df_site], ignore_index=True)
+            df_combined.to_csv(CSV_TEST_FILE, index=False)
             print(f"[INFO] CSV test output written: {CSV_TEST_FILE}", flush=True)
         except Exception as e:
             print(f"[WARN] Failed to write CSV test file: {e}", flush=True)
