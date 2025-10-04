@@ -1,11 +1,9 @@
 # =================================================
 # FILE: gsc_to_bq_searchappearance_fullfetch.py
-# REV: 6.5.11
+# REV: 6.5.12
 # PURPOSE: Full fetch SearchAppearance data from GSC to BigQuery
-#          with duplicate prevention
-#          + fetch metadata (fetch_date, fetch_id)
-#          + allocation functions (direct) with automatic upload to Allocated table
-#          + default mapping if CSV not provided
+#          + allocation applied on new or existing Raw data
+#          + Direct / Sample-driven / Proportional allocation base
 # =================================================
 
 from google.oauth2 import service_account
@@ -160,7 +158,7 @@ def fetch_searchappearance_data(start_date, end_date):
 # =================================================
 def upload_to_bq(df, table_name=BQ_TABLE_RAW):
     if df.empty:
-        print("[INFO] No new rows to insert.", flush=True)
+        print(f"[INFO] No new rows to insert into {table_name}.", flush=True)
         return
     if DEBUG_MODE:
         print(f"[DEBUG] Debug mode ON: skipping insert of {len(df)} rows to BigQuery")
@@ -177,11 +175,10 @@ def upload_to_bq(df, table_name=BQ_TABLE_RAW):
         print(f"[ERROR] Failed to insert rows: {e}", flush=True)
 
 # =================================================
-# BLOCK 7: ALLOCATION FUNCTIONS (DIRECT)
+# BLOCK 7: ALLOCATION FUNCTIONS (DIRECT / SAMPLE / PROPORTIONAL)
 # =================================================
 def direct_allocation(df_raw, mapping_df=None):
     if mapping_df is None or mapping_df.empty:
-        # create default mapping: each SearchAppearance maps to itself
         mapping_df = pd.DataFrame({
             'SearchAppearance': df_raw['SearchAppearance'],
             'TargetEntity': df_raw['SearchAppearance']
@@ -197,26 +194,34 @@ def direct_allocation(df_raw, mapping_df=None):
     df['unique_key'] = df.apply(lambda r: hashlib.sha256(f"{r['SearchAppearance']}|{r.get('TargetEntity','')}|{r['fetch_id']}".encode()).hexdigest(), axis=1)
     return df
 
+def sample_driven_allocation(df_raw, mapping_df=None):
+    # Placeholder for future sample-driven allocation logic
+    return direct_allocation(df_raw, mapping_df)  # fallback to direct for now
+
+def proportional_allocation(df_raw, mapping_df=None):
+    # Placeholder for future proportional allocation logic
+    return direct_allocation(df_raw, mapping_df)  # fallback to direct for now
+
 # =================================================
 # BLOCK 8: MAIN FUNCTION
 # =================================================
 def main():
-    # --- Ensure Raw table exists ---
     ensure_table(BQ_TABLE_RAW)
-
-    # --- Fetch SearchAppearance data ---
     df_new = fetch_searchappearance_data(START_DATE, END_DATE)
-
-    # --- Upload to Raw table ---
     upload_to_bq(df_new, BQ_TABLE_RAW)
 
-    # --- Ensure Allocated table exists ---
+    # --- If no new rows, fetch existing Raw data for allocation ---
+    if df_new.empty:
+        print("[INFO] No new Raw rows, fetching existing Raw data for allocation...")
+        query = f"SELECT * FROM `{BQ_PROJECT}.{BQ_DATASET}.{BQ_TABLE_RAW}` WHERE fetch_date >= '{START_DATE}'"
+        df_new = bq_client.query(query).to_dataframe()
+        df_new['fetch_date'] = pd.to_datetime(df_new['fetch_date']).dt.date
+
     ensure_table(BQ_TABLE_ALLOC)
 
-    # --- Apply direct allocation ---
-    df_alloc = direct_allocation(df_new)  # uses default mapping if CSV not provided
+    # --- Apply allocation (currently only direct active, others as placeholder) ---
+    df_alloc = direct_allocation(df_new)
 
-    # --- Upload allocated rows ---
     upload_to_bq(df_alloc, BQ_TABLE_ALLOC)
 
     print("[INFO] Finished processing SearchAppearance data.", flush=True)
