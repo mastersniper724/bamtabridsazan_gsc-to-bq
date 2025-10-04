@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 # ============================================================
 # File: gsc_to_bq_rev6_fullfetch.py
-# Revision: Rev6.6.7 — Batch 7 = UN-KNOWN pages added
+# Revision: Rev6.6.8 — Batch 7 = UN-KNOWN pages added
 # Purpose: Full fetch from GSC -> BigQuery with duplicate prevention and sitewide total batch
 # ============================================================
 
@@ -384,7 +384,7 @@ def main():
         if all_rows:
             df_batch4 = pd.DataFrame(all_rows)
             print(f"[INFO] Batch 4 fetched rows: {len(df_batch4)}", flush=True)
-            insert_rows_to_bq(df_batch4)
+            upload_to_bq(df_batch4)
         else:
             print("[INFO] Batch 4: No non-null page rows found.", flush=True)
     except Exception as e:
@@ -433,7 +433,7 @@ def main():
         if unknown_rows:
             df_batch7 = pd.DataFrame(unknown_rows)
             print(f"[INFO] Batch 7 fetched rows: {len(df_batch7)}", flush=True)
-            insert_rows_to_bq(df_batch7)
+            upload_to_bq(df_batch7)
         else:
             print("[INFO] Batch 7: No unknown-page rows found.", flush=True)
     except Exception as e:
