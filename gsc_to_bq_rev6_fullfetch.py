@@ -22,7 +22,7 @@ from google.cloud import bigquery
 SITE_URL = "sc-domain:bamtabridsazan.com"
 BQ_PROJECT = "bamtabridsazan"
 BQ_DATASET = "seo_reports"
-BQ_TABLE = "bamtabridsazan__gsc__raw_data_fullfetch"
+BQ_TABLE = "bamtabridsazan__gsc__raw_domain_data_fullfetch"
 ROW_LIMIT = 25000
 RETRY_DELAY = 60  # seconds
 SERVICE_ACCOUNT_FILE = os.environ.get("SERVICE_ACCOUNT_FILE", "gcp-key.json")
