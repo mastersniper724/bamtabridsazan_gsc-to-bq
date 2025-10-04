@@ -1,11 +1,11 @@
 # =================================================
 # FILE: gsc_to_bq_searchappearance_fullfetch.py
-# REV: 6.5.10
+# REV: 6.5.11
 # PURPOSE: Full fetch SearchAppearance data from GSC to BigQuery
 #          with duplicate prevention
 #          + fetch metadata (fetch_date, fetch_id)
 #          + allocation functions (direct) with automatic upload to Allocated table
-#          + Comment-marked blocks for modular understanding
+#          + default mapping if CSV not provided
 # =================================================
 
 from google.oauth2 import service_account
@@ -177,9 +177,15 @@ def upload_to_bq(df, table_name=BQ_TABLE_RAW):
         print(f"[ERROR] Failed to insert rows: {e}", flush=True)
 
 # =================================================
-# BLOCK 7: ALLOCATION FUNCTIONS
+# BLOCK 7: ALLOCATION FUNCTIONS (DIRECT)
 # =================================================
-def direct_allocation(df_raw, mapping_df):
+def direct_allocation(df_raw, mapping_df=None):
+    if mapping_df is None or mapping_df.empty:
+        # create default mapping: each SearchAppearance maps to itself
+        mapping_df = pd.DataFrame({
+            'SearchAppearance': df_raw['SearchAppearance'],
+            'TargetEntity': df_raw['SearchAppearance']
+        })
     df = df_raw.merge(mapping_df, on='SearchAppearance', how='left')
     df['AllocationMethod'] = 'direct'
     df['AllocationWeight'] = 1.0
@@ -208,11 +214,10 @@ def main():
     ensure_table(BQ_TABLE_ALLOC)
 
     # --- Apply direct allocation ---
-    # mapping_df = pd.read_csv("mapping.csv")  # mapping SearchAppearance -> page/query/schema
-    # df_alloc = direct_allocation(df_new, mapping_df)
+    df_alloc = direct_allocation(df_new)  # uses default mapping if CSV not provided
 
     # --- Upload allocated rows ---
-    # upload_to_bq(df_alloc, BQ_TABLE_ALLOC)
+    upload_to_bq(df_alloc, BQ_TABLE_ALLOC)
 
     print("[INFO] Finished processing SearchAppearance data.", flush=True)
 
