@@ -1,10 +1,10 @@
 # =================================================
 # FILE: gsc_to_bq_searchappearance_fullfetch.py
-# REV: 6.5.9
+# REV: 6.5.10
 # PURPOSE: Full fetch SearchAppearance data from GSC to BigQuery
 #          with duplicate prevention
 #          + fetch metadata (fetch_date, fetch_id)
-#          + allocation functions (direct, sample-driven, proportional)
+#          + allocation functions (direct) with automatic upload to Allocated table
 #          + Comment-marked blocks for modular understanding
 # =================================================
 
@@ -17,7 +17,6 @@ import hashlib
 import time
 import os
 import json
-import sys
 import argparse
 import warnings
 import uuid
@@ -75,16 +74,30 @@ def ensure_table(table_name=BQ_TABLE_RAW):
         print(f"[INFO] Table {table_name} exists.", flush=True)
     except:
         print(f"[INFO] Table {table_name} not found. Creating...", flush=True)
-        schema = [
-            bigquery.SchemaField("SearchAppearance", "STRING"),
-            bigquery.SchemaField("Clicks", "INTEGER"),
-            bigquery.SchemaField("Impressions", "INTEGER"),
-            bigquery.SchemaField("CTR", "FLOAT"),
-            bigquery.SchemaField("Position", "FLOAT"),
-            bigquery.SchemaField("unique_key", "STRING"),
-            bigquery.SchemaField("fetch_date", "DATE"),
-            bigquery.SchemaField("fetch_id", "STRING"),
-        ]
+        if table_name == BQ_TABLE_RAW:
+            schema = [
+                bigquery.SchemaField("SearchAppearance", "STRING"),
+                bigquery.SchemaField("Clicks", "INTEGER"),
+                bigquery.SchemaField("Impressions", "INTEGER"),
+                bigquery.SchemaField("CTR", "FLOAT"),
+                bigquery.SchemaField("Position", "FLOAT"),
+                bigquery.SchemaField("unique_key", "STRING"),
+                bigquery.SchemaField("fetch_date", "DATE"),
+                bigquery.SchemaField("fetch_id", "STRING"),
+            ]
+        else:  # Allocated table
+            schema = [
+                bigquery.SchemaField("SearchAppearance", "STRING"),
+                bigquery.SchemaField("TargetEntity", "STRING"),
+                bigquery.SchemaField("AllocationMethod", "STRING"),
+                bigquery.SchemaField("AllocationWeight", "FLOAT"),
+                bigquery.SchemaField("Clicks_alloc", "FLOAT"),
+                bigquery.SchemaField("Impressions_alloc", "FLOAT"),
+                bigquery.SchemaField("CTR_alloc", "FLOAT"),
+                bigquery.SchemaField("Position_alloc", "FLOAT"),
+                bigquery.SchemaField("fetch_id", "STRING"),
+                bigquery.SchemaField("unique_key", "STRING"),
+            ]
         table = bigquery.Table(bq_client.dataset(BQ_DATASET).table(table_name), schema=schema)
         table.clustering_fields = ["SearchAppearance"]
         bq_client.create_table(table)
@@ -138,7 +151,6 @@ def fetch_searchappearance_data(start_date, end_date):
     df_batch = pd.DataFrame(batch_new_rows, columns=[
         'SearchAppearance','Clicks','Impressions','CTR','Position','unique_key','fetch_date','fetch_id'
     ])
-    # Convert fetch_date to datetime.date for BigQuery compatibility
     df_batch['fetch_date'] = pd.to_datetime(df_batch['fetch_date']).dt.date
     print(f"[INFO] {len(df_batch)} new rows to insert. {len(rows)-len(df_batch)} duplicate rows skipped.", flush=True)
     return df_batch
@@ -176,27 +188,30 @@ def direct_allocation(df_raw, mapping_df):
     df['CTR_alloc'] = df['Clicks_alloc'] / df['Impressions_alloc'].replace(0,1)
     df['Position_alloc'] = df['Position']
     df['fetch_id'] = df_raw['fetch_id']
-    df['unique_key'] = df.apply(lambda r: hashlib.sha256(f"{r['SearchAppearance']}|{r.get('TargetEntity','') }|{r['fetch_id']}".encode()).hexdigest(), axis=1)
+    df['unique_key'] = df.apply(lambda r: hashlib.sha256(f"{r['SearchAppearance']}|{r.get('TargetEntity','')}|{r['fetch_id']}".encode()).hexdigest(), axis=1)
     return df
-
-# همانند direct_allocation می‌توان sample_driven_allocation و proportional_allocation ایجاد کرد
 
 # =================================================
 # BLOCK 8: MAIN FUNCTION
 # =================================================
 def main():
-    # Step 1: Ensure Raw table exists
+    # --- Ensure Raw table exists ---
     ensure_table(BQ_TABLE_RAW)
 
-    # Step 2: Fetch SearchAppearance data
+    # --- Fetch SearchAppearance data ---
     df_new = fetch_searchappearance_data(START_DATE, END_DATE)
 
-    # Step 3: Upload to Raw
+    # --- Upload to Raw table ---
     upload_to_bq(df_new, BQ_TABLE_RAW)
 
-    # Step 4: Allocation (مثال direct، mapping_df باید از قبل آماده باشد)
-    # mapping_df = pd.read_csv("mapping.csv")  # نمونه
+    # --- Ensure Allocated table exists ---
+    ensure_table(BQ_TABLE_ALLOC)
+
+    # --- Apply direct allocation ---
+    # mapping_df = pd.read_csv("mapping.csv")  # mapping SearchAppearance -> page/query/schema
     # df_alloc = direct_allocation(df_new, mapping_df)
+
+    # --- Upload allocated rows ---
     # upload_to_bq(df_alloc, BQ_TABLE_ALLOC)
 
     print("[INFO] Finished processing SearchAppearance data.", flush=True)
