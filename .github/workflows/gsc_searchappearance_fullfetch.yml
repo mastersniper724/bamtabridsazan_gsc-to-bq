@@ -1,4 +1,4 @@
-name: GSC (searchAppearance) Full Fetch to BigQuery (rev0)
+name: GSC (searchAppearance) Full Fetch to BigQuery (rev1)
 
 on:
   workflow_dispatch:
@@ -47,7 +47,7 @@ jobs:
       - name: Validate gcp-key.json
         run: python -c "import json; json.load(open('gcp-key.json'))"
 
-      - name: Run Full Fetch Python
+      - name: Run Full Fetch Python (REV 6.5.8)
         env:
           GOOGLE_APPLICATION_CREDENTIALS: gcp-key.json
         shell: bash
@@ -57,7 +57,7 @@ jobs:
           else
             DEBUG_FLAG=""
           fi
-          CSV_TEST_FILE="gsc_fullfetch_test_rev02_${{ github.run_id }}.csv"
+          CSV_TEST_FILE="gsc_fullfetch_test_rev03_${{ github.run_id }}.csv"
 
           python gsc_to_bq_searchappearance_fullfetch.py \
             $DEBUG_FLAG \
@@ -69,5 +69,5 @@ jobs:
         if: ${{ github.event.inputs.debug == 'true' }}
         uses: actions/upload-artifact@v4
         with:
-          name: gsc_fullfetch_test_csv_rev02
-          path: gsc_fullfetch_test_rev02_*.csv
+          name: gsc_fullfetch_test_csv_rev03
+          path: gsc_fullfetch_test_rev03_*.csv
