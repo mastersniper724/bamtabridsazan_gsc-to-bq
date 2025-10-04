@@ -163,6 +163,8 @@ def fetch_searchappearance_data(start_date, end_date):
             existing_keys.add(key)
             batch_new_rows.append([sa, clicks, impressions, ctr, position, key, FETCH_DATE, FETCH_ID])
     df_batch = pd.DataFrame(batch_new_rows, columns=['SearchAppearance','Clicks','Impressions','CTR','Position','unique_key','fetch_date','fetch_id'])
+    # تبدیل fetch_date به datetime.date برای BigQuery
+    df_batch['fetch_date'] = pd.to_datetime(df_batch['fetch_date']).dt.date
     print(f"[INFO] {len(df_batch)} new rows to insert. {len(rows)-len(df_batch)} duplicate rows skipped.", flush=True)
     return df_batch
 
