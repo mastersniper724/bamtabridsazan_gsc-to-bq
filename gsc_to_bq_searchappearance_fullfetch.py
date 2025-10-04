@@ -1,9 +1,10 @@
 # =================================================
 # FILE: gsc_to_bq_searchappearance_fullfetch.py
-# REV: 6.5.7
+# REV: 6.5.8
 # PURPOSE: Full fetch SearchAppearance data from GSC to BigQuery
 #          with duplicate prevention using unique_key
-#          Only fix: ignore --csv-test argument to prevent crash
+#          + fetch metadata (fetch_date, fetch_id)
+#          + allocation functions (direct, sample-driven, proportional)
 # =================================================
 
 from google.oauth2 import service_account
@@ -18,6 +19,7 @@ import json
 import sys
 import argparse
 import warnings
+import uuid
 
 # ---------- CONFIG ----------
 SITE_URL = "sc-domain:bamtabridsazan.com"
@@ -40,6 +42,10 @@ args = parser.parse_args()
 START_DATE = args.start_date or (datetime.utcnow() - timedelta(days=3)).strftime('%Y-%m-%d')
 END_DATE = args.end_date or datetime.utcnow().strftime('%Y-%m-%d')
 DEBUG_MODE = args.debug
+
+# ---------- FETCH METADATA ----------
+FETCH_DATE = datetime.utcnow().strftime('%Y-%m-%d')
+FETCH_ID = f"{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
 
 # ---------- CREDENTIALS ----------
 SERVICE_ACCOUNT_FILE = os.environ.get("SERVICE_ACCOUNT_FILE", "gcp-key.json")
@@ -68,6 +74,8 @@ def ensure_table():
             bigquery.SchemaField("CTR", "FLOAT"),
             bigquery.SchemaField("Position", "FLOAT"),
             bigquery.SchemaField("unique_key", "STRING"),
+            bigquery.SchemaField("fetch_date", "DATE"),
+            bigquery.SchemaField("fetch_id", "STRING"),
         ]
         table = bigquery.Table(table_ref, schema=schema)
         table.clustering_fields = ["SearchAppearance"]
@@ -153,10 +161,44 @@ def fetch_searchappearance_data(start_date, end_date):
         key = stable_key({'SearchAppearance': sa})
         if key not in existing_keys:
             existing_keys.add(key)
-            batch_new_rows.append([sa, clicks, impressions, ctr, position, key])
-    df_batch = pd.DataFrame(batch_new_rows, columns=['SearchAppearance','Clicks','Impressions','CTR','Position','unique_key'])
+            batch_new_rows.append([sa, clicks, impressions, ctr, position, key, FETCH_DATE, FETCH_ID])
+    df_batch = pd.DataFrame(batch_new_rows, columns=['SearchAppearance','Clicks','Impressions','CTR','Position','unique_key','fetch_date','fetch_id'])
     print(f"[INFO] {len(df_batch)} new rows to insert. {len(rows)-len(df_batch)} duplicate rows skipped.", flush=True)
     return df_batch
+
+# ---------- ALLOCATION FUNCTIONS ----------
+def direct_mapping(df_raw, mapping_df):
+    df = df_raw.merge(mapping_df, on='SearchAppearance', how='left')
+    df['AllocationMethod'] = 'direct'
+    df['AllocationWeight'] = 1.0
+    df['Clicks_alloc'] = df['Clicks'] * df['AllocationWeight']
+    df['Impressions_alloc'] = df['Impressions'] * df['AllocationWeight']
+    df['CTR_alloc'] = df['Clicks_alloc'] / df['Impressions_alloc'].replace(0,1)
+    df['Position_alloc'] = df['Position']
+    df['fetch_id'] = FETCH_ID
+    return df
+
+def sample_driven_mapping(df_raw, mapping_df):
+    df = df_raw.merge(mapping_df, on='SearchAppearance', how='left')
+    df['AllocationMethod'] = 'sample-driven'
+    df['AllocationWeight'] = df['sample_ratio'].fillna(0)
+    df['Clicks_alloc'] = df['Clicks'] * df['AllocationWeight']
+    df['Impressions_alloc'] = df['Impressions'] * df['AllocationWeight']
+    df['CTR_alloc'] = df['Clicks_alloc'] / df['Impressions_alloc'].replace(0,1)
+    df['Position_alloc'] = df['Position'] * df['AllocationWeight']
+    df['fetch_id'] = FETCH_ID
+    return df
+
+def proportional_allocation(df_raw, mapping_df):
+    df = df_raw.merge(mapping_df, on='SearchAppearance', how='left')
+    df['AllocationMethod'] = 'proportional'
+    df['AllocationWeight'] = df['prop_share'].fillna(0)
+    df['Clicks_alloc'] = df['Clicks'] * df['AllocationWeight']
+    df['Impressions_alloc'] = df['Impressions'] * df['AllocationWeight']
+    df['CTR_alloc'] = df['Clicks_alloc'] / df['Impressions_alloc'].replace(0,1)
+    df['Position_alloc'] = df['Position'] * df['AllocationWeight']
+    df['fetch_id'] = FETCH_ID
+    return df
 
 # ---------- MAIN ----------
 def main():
