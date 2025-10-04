@@ -23,7 +23,7 @@ import warnings
 SITE_URL = "sc-domain:bamtabridsazan.com"
 BQ_PROJECT = 'bamtabridsazan'
 BQ_DATASET = 'seo_reports'
-BQ_TABLE = 'bamtabridsazan__gsc__raw_data_searchappearance'
+BQ_TABLE = 'bamtabridsazan__gsc__raw_domain_data_searchappearance'
 ROW_LIMIT = 25000
 RETRY_DELAY = 60  # seconds in case of timeout
 
