@@ -382,9 +382,13 @@ def main():
             start_row += len(rows)
 
         if all_rows:
+            for row in all_rows:
+                row["unique_key"] = generate_unique_key(row)
+
             df_batch4 = pd.DataFrame(all_rows)
             print(f"[INFO] Batch 4 fetched rows: {len(df_batch4)}", flush=True)
-            upload_to_bq(df_batch4)
+            if not df_batch4.empty:
+                upload_to_bq(df_batch4)            
         else:
             print("[INFO] Batch 4: No non-null page rows found.", flush=True)
     except Exception as e:
@@ -431,9 +435,14 @@ def main():
             start_row += len(rows)
 
         if unknown_rows:
+                # قبل از ساخت DataFrame، unique_key اضافه می‌کنیم
+            for row in unknown_rows:
+                row["unique_key"] = generate_unique_key(row)
+                
             df_batch7 = pd.DataFrame(unknown_rows)
             print(f"[INFO] Batch 7 fetched rows: {len(df_batch7)}", flush=True)
-            upload_to_bq(df_batch7)
+            if not df_batch7.empty:
+                upload_to_bq(df_batch7)
         else:
             print("[INFO] Batch 7: No unknown-page rows found.", flush=True)
     except Exception as e:
