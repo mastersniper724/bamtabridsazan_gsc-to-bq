@@ -1,6 +1,6 @@
 # =================================================
 # FILE: gsc_to_bq_searchappearance_fullfetch.py
-# REV: 6.5.13
+# REV: 6.5.14
 # PURPOSE: Full fetch SearchAppearance data from GSC to BigQuery
 #          + allocation applied on new or existing Raw data
 #          + Direct / Sample-driven / Proportional allocation base
@@ -156,23 +156,29 @@ def fetch_searchappearance_data(start_date, end_date):
 # =================================================
 # BLOCK 6: UPLOAD FUNCTIONS
 # =================================================
-def upload_to_bq(df, table_name=BQ_TABLE_RAW):
+def upload_to_bq(df, table_name):
     if df.empty:
         print(f"[INFO] No new rows to insert into {table_name}.", flush=True)
         return
-    if DEBUG_MODE:
-        print(f"[DEBUG] Debug mode ON: skipping insert of {len(df)} rows to BigQuery")
-        return
-    df['Clicks'] = pd.to_numeric(df['Clicks'], errors='coerce').fillna(0).astype(int)
-    df['Impressions'] = pd.to_numeric(df['Impressions'], errors='coerce').fillna(0).astype(int)
-    df['CTR'] = pd.to_numeric(df['CTR'], errors='coerce').fillna(0.0).astype(float)
-    df['Position'] = pd.to_numeric(df['Position'], errors='coerce').fillna(0.0).astype(float)
+
+    # --- Determine schema type ---
+    if 'Clicks' in df.columns:
+        numeric_cols = ['Clicks','Impressions','CTR','Position']
+    elif 'Clicks_alloc' in df.columns:
+        numeric_cols = ['Clicks_alloc','Impressions_alloc','CTR_alloc','Position_alloc']
+    else:
+        numeric_cols = []
+
+    for col in numeric_cols:
+        df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+
     try:
         job_config = bigquery.LoadJobConfig(write_disposition="WRITE_APPEND")
-        bq_client.load_table_from_dataframe(df, bq_client.dataset(BQ_DATASET).table(table_name), job_config=job_config).result()
+        bq_client.load_table_from_dataframe(df, table_name, job_config=job_config).result()
         print(f"[INFO] Inserted {len(df)} rows to {table_name}.", flush=True)
     except Exception as e:
         print(f"[ERROR] Failed to insert rows: {e}", flush=True)
+
 
 # =================================================
 # BLOCK 7: ALLOCATION FUNCTIONS (DIRECT / SAMPLE / PROPORTIONAL)
