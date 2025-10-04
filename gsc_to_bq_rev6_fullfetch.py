@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 # ============================================================
 # File: gsc_to_bq_rev6_fullfetch.py
-# Revision: Rev6.6.8 — Batch 7 = UN-KNOWN pages added
+# Revision: Rev6.6.9 — Batch 7 = UN-KNOWN pages added
 # Purpose: Full fetch from GSC -> BigQuery with duplicate prevention and sitewide total batch
 # ============================================================
 
