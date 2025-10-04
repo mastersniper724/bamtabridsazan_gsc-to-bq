@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 # ============================================================
 # File: gsc_to_bq_rev6_fullfetch.py
-# Revision: Rev6.6.12 — read existing_keys once; Duplicate-check enforced for Blocks B & C; logs improved
+# Revision: Rev6.6.13 — read existing_keys once; Duplicate-check enforced for Blocks B & C; logs improved
 # Purpose: Full fetch from GSC -> BigQuery with duplicate prevention and sitewide total batch
 # ============================================================
 
@@ -431,67 +431,6 @@ def main():
     except Exception as e:
         print(f"[ERROR] Failed to fetch Batch 4 (Date + Page): {e}", flush=True)
 
-    # ----------------------------
-    # C. Fetch Batch 7: Unknown Page Data (page IS NULL)
-    # ----------------------------
-    print("[INFO] Fetching Batch 7 (Unknown Page Data, where page is NULL)...", flush=True)
-    try:
-        service = get_gsc_service()
-        start_row = 0
-        unknown_rows = []
-        fetched_b7 = 0
-        new_b7 = 0
-        inserted_b7 = 0
-
-        while True:
-            request = {
-                "startDate": START_DATE,
-                "endDate": END_DATE,
-                "dimensions": ["date", "page"],
-                "rowLimit": ROW_LIMIT,
-                "startRow": start_row,
-            }
-            resp = service.searchanalytics().query(siteUrl=SITE_URL, body=request).execute()
-            rows = resp.get("rows", [])
-            if not rows:
-                break
-
-            for r in rows:
-                fetched_b7 += 1
-                keys = r.get("keys", [])
-                # capture rows where page key is explicitly empty/null
-                if len(keys) == 2 and (not keys[1]):
-                    row = {
-                        "Date": keys[0],
-                        "Query": "__NO_INDEX__",
-                        "Page": "__NO_INDEX__",
-                        "Country": None,
-                        "Device": None,
-                        "Clicks": r.get("clicks", 0),
-                        "Impressions": r.get("impressions", 0),
-                        "CTR": r.get("ctr", 0.0),
-                        "Position": r.get("position", 0.0),
-                    }
-                    row["unique_key"] = generate_unique_key(row)
-                    if row["unique_key"] not in existing_keys:
-                        existing_keys.add(row["unique_key"])
-                        unknown_rows.append(row)
-                        new_b7 += 1
-
-            if len(rows) < ROW_LIMIT:
-                break
-            start_row += len(rows)
-
-        if unknown_rows:
-            df_batch7 = pd.DataFrame(unknown_rows)
-            inserted = upload_to_bq(df_batch7)
-            inserted_b7 += inserted
-            print(f"[INFO] Batch 7 Summary: fetched={fetched_b7}, new={new_b7}, inserted={inserted_b7}", flush=True)
-        else:
-            print("[INFO] Batch 7: No unknown-page rows found.", flush=True)
-
-    except Exception as e:
-        print(f"[ERROR] Failed to fetch Batch 7 (Unknown Page): {e}", flush=True)
 
     # --- run isolated sitewide batch ---
     df_site, total_site = fetch_sitewide_batch(START_DATE, END_DATE, existing_keys)
