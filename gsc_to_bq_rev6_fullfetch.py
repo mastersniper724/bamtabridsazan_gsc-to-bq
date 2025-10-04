@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 # ============================================================
 # File: gsc_to_bq_rev6_fullfetch.py
-# Revision: Rev6.6.3 — Batch 5 = Date + Page, Batch 6 = Date + Query added
+# Revision: Rev6.6.4 — Batch 7 = UN-KNOWN pages added
 # Purpose: Full fetch from GSC -> BigQuery with duplicate prevention and sitewide total batch
 # ============================================================
 
@@ -161,7 +161,6 @@ def fetch_gsc_data(start_date, end_date):
         ["date", "query", "page"],
         ["date", "query", "country"],
         ["date", "query", "device"],
-        ["date", "page"],               # Batch 5 جدید
         ["date", "query"],              # Batch 6 جدید
     ]
 
@@ -233,7 +232,7 @@ def fetch_gsc_data(start_date, end_date):
     df_all_new = pd.DataFrame(all_new_rows)
     return df_all_new, total_new_count
 
-# ---------- NEW: FETCH SITEWIDE BATCH (ISOLATED) ----------
+# ---------- A: FETCH SITEWIDE BATCH (ISOLATED) ----------
 def fetch_sitewide_batch(start_date, end_date):
     print("[INFO] Running sitewide batch ['date']...", flush=True)
     service = get_gsc_service()
@@ -334,6 +333,62 @@ def fetch_sitewide_batch(start_date, end_date):
     print(f"[INFO] Sitewide batch done: {total_new_count} new rows inserted.", flush=True)
     return pd.DataFrame(all_new_rows), total_new_count
 
+
+# ----------------------------
+# B. Fetch Batch 4: Date + Page (Page IS NOT NULL)
+# ----------------------------
+logger.info("Fetching Batch 4 (Date + Page, excluding NULL pages)...")
+
+batch4_rows = []
+try:
+    data = fetch_gsc_data(
+        start_date=start_date,
+        end_date=end_date,
+        dimensions=["date", "page"],
+        row_limit=25000
+    )
+    for row in data:
+        # فقط ردیف‌هایی که page پر دارند
+        if "keys" in row and len(row["keys"]) == 2 and row["keys"][1]:
+            batch4_rows.append(row)
+except Exception as e:
+    logger.error(f"Error fetching Batch 4 (Date+Page): {e}")
+
+logger.info(f"Batch 4 fetched rows: {len(batch4_rows)}")
+
+# افزودن به خروجی نهایی
+if batch4_rows:
+    all_rows.extend(batch4_rows)
+
+# ----------------------------
+# C. Fetch Batch 7: Unknown Page Data (page IS NULL)
+# ----------------------------
+logger.info("Fetching Batch 7 (Unknown Page Data, where page is NULL)...")
+
+batch7_rows = []
+try:
+    data = fetch_gsc_data(
+        start_date=start_date,
+        end_date=end_date,
+        dimensions=["date", "page"],
+        row_limit=25000
+    )
+
+    for row in data:
+        # فقط ردیف‌هایی که page خالی یا NULL هستن
+        if "keys" in row and len(row["keys"]) == 2 and not row["keys"][1]:
+            # جایگزین کردن مقدار خالی با placeholder
+            row["keys"][1] = "__UNKNOWN_PAGE__"
+            batch7_rows.append(row)
+
+except Exception as e:
+    logger.error(f"Error fetching Batch 7 (Unknown Page): {e}")
+
+logger.info(f"Batch 7 fetched rows: {len(batch7_rows)}")
+
+# افزودن به خروجی نهایی
+if batch7_rows:
+    all_rows.extend(batch7_rows)
 
 
 # ---------- MAIN ----------
