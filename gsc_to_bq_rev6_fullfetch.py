@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 # ============================================================
 # File: gsc_to_bq_rev6_fullfetch.py
-# Revision: Rev6.6.13 — read existing_keys once; Duplicate-check enforced for Blocks B & C; logs improved
+# Revision: Rev6.6.14 — read existing_keys once; Duplicate-check enforced for Blocks B & C; logs improved
 # Purpose: Full fetch from GSC -> BigQuery with duplicate prevention and sitewide total batch
 # ============================================================
 
@@ -19,7 +19,7 @@ from googleapiclient.discovery import build
 from google.cloud import bigquery
 
 # ---------- CONFIG ----------
-SITE_URL = "https://bamtabridsazan.com/"
+SITE_URL = "sc-domain:bamtabridsazan.com"
 BQ_PROJECT = "bamtabridsazan"
 BQ_DATASET = "seo_reports"
 BQ_TABLE = "bamtabridsazan__gsc__raw_data_fullfetch"
