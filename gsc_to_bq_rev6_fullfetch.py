@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 # ============================================================
 # File: gsc_to_bq_rev6_fullfetch.py
-# Revision: Rev6.6.4 — Batch 7 = UN-KNOWN pages added
+# Revision: Rev6.6.5 — Batch 7 = UN-KNOWN pages added
 # Purpose: Full fetch from GSC -> BigQuery with duplicate prevention and sitewide total batch
 # ============================================================
 
@@ -337,58 +337,63 @@ def fetch_sitewide_batch(start_date, end_date):
 # ----------------------------
 # B. Fetch Batch 4: Date + Page (Page IS NOT NULL)
 # ----------------------------
-logger.info("Fetching Batch 4 (Date + Page, excluding NULL pages)...")
+    print("[INFO] Fetching Batch 4 (Date + Page, excluding NULL pages)...", flush=True)
+    df_batch4 = pd.DataFrame()
+    try:
+        data_batch4 = fetch_gsc_data(
+            START_DATE,
+            END_DATE,
+            dimensions=["date", "page"],
+        )
+        # فیلتر کردن رکوردهایی که Page ندارن
+        filtered_rows = []
+        for row in data_batch4:
+            if "keys" in row and len(row["keys"]) == 2 and row["keys"][1]:
+                filtered_rows.append(row)
 
-batch4_rows = []
-try:
-    data = fetch_gsc_data(
-        start_date=start_date,
-        end_date=end_date,
-        dimensions=["date", "page"],
-        row_limit=25000
-    )
-    for row in data:
-        # فقط ردیف‌هایی که page پر دارند
-        if "keys" in row and len(row["keys"]) == 2 and row["keys"][1]:
-            batch4_rows.append(row)
-except Exception as e:
-    logger.error(f"Error fetching Batch 4 (Date+Page): {e}")
+        if filtered_rows:
+            df_batch4 = pd.DataFrame(filtered_rows)
+            print(f"[INFO] Batch 4 fetched rows: {len(filtered_rows)}", flush=True)
+            if not df_batch4.empty:
+                insert_rows_to_bq(df_batch4)
+        else:
+            print("[INFO] Batch 4: No rows with non-null page found.", flush=True)
 
-logger.info(f"Batch 4 fetched rows: {len(batch4_rows)}")
+    except Exception as e:
+        print(f"[ERROR] Failed to fetch Batch 4 (Date + Page): {e}", flush=True)
 
-# افزودن به خروجی نهایی
-if batch4_rows:
-    all_rows.extend(batch4_rows)
 
 # ----------------------------
 # C. Fetch Batch 7: Unknown Page Data (page IS NULL)
 # ----------------------------
-logger.info("Fetching Batch 7 (Unknown Page Data, where page is NULL)...")
+    print("[INFO] Fetching Batch 7 (Unknown Page Data, where page is NULL)...", flush=True)
+    df_batch7 = pd.DataFrame()
+    try:
+        data_batch7 = fetch_gsc_data(
+            START_DATE,
+            END_DATE,
+            dimensions=["date", "page"],
+        )
+        unknown_rows = []
+        for row in data_batch7:
+            if "keys" in row and len(row["keys"]) == 2 and not row["keys"][1]:
+                row["keys"][1] = "__UNKNOWN_PAGE__"
+                unknown_rows.append(row)
 
-batch7_rows = []
-try:
-    data = fetch_gsc_data(
-        start_date=start_date,
-        end_date=end_date,
-        dimensions=["date", "page"],
-        row_limit=25000
-    )
+        if unknown_rows:
+            df_batch7 = pd.DataFrame(unknown_rows)
+            print(f"[INFO] Batch 7 fetched rows: {len(unknown_rows)}", flush=True)
+            if not df_batch7.empty:
+                insert_rows_to_bq(df_batch7)
+        else:
+            print("[INFO] Batch 7: No unknown-page rows found.", flush=True)
 
-    for row in data:
-        # فقط ردیف‌هایی که page خالی یا NULL هستن
-        if "keys" in row and len(row["keys"]) == 2 and not row["keys"][1]:
-            # جایگزین کردن مقدار خالی با placeholder
-            row["keys"][1] = "__UNKNOWN_PAGE__"
-            batch7_rows.append(row)
+    except Exception as e:
+        print(f"[ERROR] Failed to fetch Batch 7 (Unknown Page): {e}", flush=True)
 
-except Exception as e:
-    logger.error(f"Error fetching Batch 7 (Unknown Page): {e}")
 
-logger.info(f"Batch 7 fetched rows: {len(batch7_rows)}")
-
-# افزودن به خروجی نهایی
-if batch7_rows:
-    all_rows.extend(batch7_rows)
+# --- run isolated sitewide batch ---
+df_site, total_site = fetch_sitewide_batch(START_DATE, END_DATE)
 
 
 # ---------- MAIN ----------
