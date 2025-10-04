@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 # ============================================================
 # File: gsc_to_bq_rev6_fullfetch.py
-# Revision: Rev6.6.9 — Batch 7 = UN-KNOWN pages added
+# Revision: Rev6.6.10 — Batch 7 = UN-KNOWN pages added
 # Purpose: Full fetch from GSC -> BigQuery with duplicate prevention and sitewide total batch
 # ============================================================
 
@@ -342,111 +342,118 @@ def main():
     df_new, total_inserted = fetch_gsc_data(START_DATE, END_DATE)
 
         # ----------------------------
-    # B. Fetch Batch 4: Date + Page (Page IS NOT NULL)
-    # ----------------------------
-    print("[INFO] Fetching Batch 4 (Date + Page, excluding NULL pages)...", flush=True)
-    try:
-        service = get_gsc_service()
-        start_row = 0
-        all_rows = []
-        while True:
-            request = {
-                "startDate": START_DATE,
-                "endDate": END_DATE,
-                "dimensions": ["date", "page"],
-                "rowLimit": ROW_LIMIT,
-                "startRow": start_row,
-            }
-            resp = service.searchanalytics().query(siteUrl=SITE_URL, body=request).execute()
-            rows = resp.get("rows", [])
-            if not rows:
-                break
+# B. Fetch Batch 4: Date + Page (Page IS NOT NULL)
+# ----------------------------
+print("[INFO] Fetching Batch 4 (Date + Page, excluding NULL pages)...", flush=True)
+try:
+    service = get_gsc_service()
+    start_row = 0
+    all_rows = []
+    existing_keys = get_existing_keys()  # Duplicate check
 
-            for r in rows:
-                keys = r.get("keys", [])
-                if len(keys) == 2 and keys[1]:  # فقط صفحات non-null
-                    all_rows.append({
-                        "Date": keys[0],
-                        "Query": "__PAGE_TOTAL__",
-                        "Page": keys[1],
-                        "Country": None,
-                        "Device": None,
-                        "Clicks": r.get("clicks", 0),
-                        "Impressions": r.get("impressions", 0),
-                        "CTR": r.get("ctr", 0.0),
-                        "Position": r.get("position", 0.0),
-                    })
+    while True:
+        request = {
+            "startDate": START_DATE,
+            "endDate": END_DATE,
+            "dimensions": ["date", "page"],
+            "rowLimit": ROW_LIMIT,
+            "startRow": start_row,
+        }
+        resp = service.searchanalytics().query(siteUrl=SITE_URL, body=request).execute()
+        rows = resp.get("rows", [])
+        if not rows:
+            break
 
-            if len(rows) < ROW_LIMIT:
-                break
-            start_row += len(rows)
-
-        if all_rows:
-            for row in all_rows:
+        for r in rows:
+            keys = r.get("keys", [])
+            if len(keys) == 2 and keys[1]:  # فقط صفحات non-null
+                row = {
+                    "Date": keys[0],
+                    "Query": "__PAGE_TOTAL__",
+                    "Page": keys[1],
+                    "Country": None,
+                    "Device": None,
+                    "Clicks": r.get("clicks", 0),
+                    "Impressions": r.get("impressions", 0),
+                    "CTR": r.get("ctr", 0.0),
+                    "Position": r.get("position", 0.0),
+                }
                 row["unique_key"] = generate_unique_key(row)
+                if row["unique_key"] not in existing_keys:
+                    existing_keys.add(row["unique_key"])
+                    all_rows.append(row)
 
-            df_batch4 = pd.DataFrame(all_rows)
-            print(f"[INFO] Batch 4 fetched rows: {len(df_batch4)}", flush=True)
-            if not df_batch4.empty:
-                upload_to_bq(df_batch4)            
-        else:
-            print("[INFO] Batch 4: No non-null page rows found.", flush=True)
-    except Exception as e:
-        print(f"[ERROR] Failed to fetch Batch 4 (Date + Page): {e}", flush=True)
+        if len(rows) < ROW_LIMIT:
+            break
+        start_row += len(rows)
 
-    # ----------------------------
-    # C. Fetch Batch 7: Unknown Page Data (page IS NULL)
-    # ----------------------------
-    print("[INFO] Fetching Batch 7 (Unknown Page Data, where page is NULL)...", flush=True)
-    try:
-        service = get_gsc_service()
-        start_row = 0
-        unknown_rows = []
-        while True:
-            request = {
-                "startDate": START_DATE,
-                "endDate": END_DATE,
-                "dimensions": ["date", "page"],
-                "rowLimit": ROW_LIMIT,
-                "startRow": start_row,
-            }
-            resp = service.searchanalytics().query(siteUrl=SITE_URL, body=request).execute()
-            rows = resp.get("rows", [])
-            if not rows:
-                break
+    if all_rows:
+        df_batch4 = pd.DataFrame(all_rows)
+        print(f"[INFO] Batch 4 fetched rows: {len(df_batch4)}", flush=True)
+        if not df_batch4.empty:
+            upload_to_bq(df_batch4)
+    else:
+        print("[INFO] Batch 4: No non-null page rows found.", flush=True)
 
-            for r in rows:
-                keys = r.get("keys", [])
-                if len(keys) == 2 and not keys[1]:  # Page = NULL
-                    unknown_rows.append({
-                        "Date": keys[0],
-                        "Query": "__NO_INDEX__",
-                        "Page": "__NO_INDEX__",
-                        "Country": None,
-                        "Device": None,
-                        "Clicks": r.get("clicks", 0),
-                        "Impressions": r.get("impressions", 0),
-                        "CTR": r.get("ctr", 0.0),
-                        "Position": r.get("position", 0.0),
-                    })
+except Exception as e:
+    print(f"[ERROR] Failed to fetch Batch 4 (Date + Page): {e}", flush=True)
 
-            if len(rows) < ROW_LIMIT:
-                break
-            start_row += len(rows)
+# ----------------------------
+# C. Fetch Batch 7: Unknown Page Data (page IS NULL)
+# ----------------------------
+print("[INFO] Fetching Batch 7 (Unknown Page Data, where page is NULL)...", flush=True)
+try:
+    service = get_gsc_service()
+    start_row = 0
+    unknown_rows = []
+    existing_keys = get_existing_keys()  # Duplicate check
 
-        if unknown_rows:
-                # قبل از ساخت DataFrame، unique_key اضافه می‌کنیم
-            for row in unknown_rows:
+    while True:
+        request = {
+            "startDate": START_DATE,
+            "endDate": END_DATE,
+            "dimensions": ["date", "page"],
+            "rowLimit": ROW_LIMIT,
+            "startRow": start_row,
+        }
+        resp = service.searchanalytics().query(siteUrl=SITE_URL, body=request).execute()
+        rows = resp.get("rows", [])
+        if not rows:
+            break
+
+        for r in rows:
+            keys = r.get("keys", [])
+            if len(keys) == 2 and not keys[1]:  # Page = NULL
+                row = {
+                    "Date": keys[0],
+                    "Query": "__NO_INDEX__",
+                    "Page": "__NO_INDEX__",
+                    "Country": None,
+                    "Device": None,
+                    "Clicks": r.get("clicks", 0),
+                    "Impressions": r.get("impressions", 0),
+                    "CTR": r.get("ctr", 0.0),
+                    "Position": r.get("position", 0.0),
+                }
                 row["unique_key"] = generate_unique_key(row)
-                
-            df_batch7 = pd.DataFrame(unknown_rows)
-            print(f"[INFO] Batch 7 fetched rows: {len(df_batch7)}", flush=True)
-            if not df_batch7.empty:
-                upload_to_bq(df_batch7)
-        else:
-            print("[INFO] Batch 7: No unknown-page rows found.", flush=True)
-    except Exception as e:
-        print(f"[ERROR] Failed to fetch Batch 7 (Unknown Page): {e}", flush=True)
+                if row["unique_key"] not in existing_keys:
+                    existing_keys.add(row["unique_key"])
+                    unknown_rows.append(row)
+
+        if len(rows) < ROW_LIMIT:
+            break
+        start_row += len(rows)
+
+    if unknown_rows:
+        df_batch7 = pd.DataFrame(unknown_rows)
+        print(f"[INFO] Batch 7 fetched rows: {len(df_batch7)}", flush=True)
+        if not df_batch7.empty:
+            upload_to_bq(df_batch7)
+    else:
+        print("[INFO] Batch 7: No unknown-page rows found.", flush=True)
+
+except Exception as e:
+    print(f"[ERROR] Failed to fetch Batch 7 (Unknown Page): {e}", flush=True)
 
 
     # --- run isolated sitewide batch ---
