@@ -1,6 +1,6 @@
 # =================================================
 # FILE: gsc_to_bq_searchappearance_fullfetch.py
-# REV: 6.5.12
+# REV: 6.5.13
 # PURPOSE: Full fetch SearchAppearance data from GSC to BigQuery
 #          + allocation applied on new or existing Raw data
 #          + Direct / Sample-driven / Proportional allocation base
@@ -203,7 +203,7 @@ def proportional_allocation(df_raw, mapping_df=None):
     return direct_allocation(df_raw, mapping_df)  # fallback to direct for now
 
 # =================================================
-# BLOCK 8: MAIN FUNCTION
+# BLOCK 8: MAIN FUNCTION (Updated for 6.5.13)
 # =================================================
 def main():
     ensure_table(BQ_TABLE_RAW)
@@ -222,9 +222,19 @@ def main():
     # --- Apply allocation (currently only direct active, others as placeholder) ---
     df_alloc = direct_allocation(df_new)
 
+    # --- Fix: Keep only columns expected by Allocated table schema ---
+    df_alloc = df_alloc[['SearchAppearance','TargetEntity','AllocationMethod','AllocationWeight',
+                         'Clicks_alloc','Impressions_alloc','CTR_alloc','Position_alloc',
+                         'fetch_id','unique_key']]
+
     upload_to_bq(df_alloc, BQ_TABLE_ALLOC)
 
     print("[INFO] Finished processing SearchAppearance data.", flush=True)
 
+
+# =================================================
+# BLOCK 9: SCRIPT EXECUTION
+# =================================================
 if __name__ == "__main__":
     main()
+
