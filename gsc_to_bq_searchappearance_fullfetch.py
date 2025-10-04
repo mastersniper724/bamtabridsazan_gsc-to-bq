@@ -1,6 +1,6 @@
 # =================================================
 # FILE: gsc_to_bq_searchappearance_fullfetch.py
-# REV: 6.5.14
+# REV: 6.5.15
 # PURPOSE: Full fetch SearchAppearance data from GSC to BigQuery
 #          + allocation applied on new or existing Raw data
 #          + Direct / Sample-driven / Proportional allocation base
@@ -156,12 +156,15 @@ def fetch_searchappearance_data(start_date, end_date):
 # =================================================
 # BLOCK 6: UPLOAD FUNCTIONS
 # =================================================
+# =================================================
+# BLOCK 6: UPLOAD FUNCTIONS (Updated for 6.5.15)
+# =================================================
 def upload_to_bq(df, table_name):
     if df.empty:
         print(f"[INFO] No new rows to insert into {table_name}.", flush=True)
         return
 
-    # --- Determine schema type ---
+    # --- Determine schema type and numeric columns ---
     if 'Clicks' in df.columns:
         numeric_cols = ['Clicks','Impressions','CTR','Position']
     elif 'Clicks_alloc' in df.columns:
@@ -172,10 +175,13 @@ def upload_to_bq(df, table_name):
     for col in numeric_cols:
         df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
 
+    # --- Ensure fully-qualified table_id ---
+    full_table_id = f"{BQ_PROJECT}.{BQ_DATASET}.{table_name}"
+
     try:
         job_config = bigquery.LoadJobConfig(write_disposition="WRITE_APPEND")
-        bq_client.load_table_from_dataframe(df, table_name, job_config=job_config).result()
-        print(f"[INFO] Inserted {len(df)} rows to {table_name}.", flush=True)
+        bq_client.load_table_from_dataframe(df, full_table_id, job_config=job_config).result()
+        print(f"[INFO] Inserted {len(df)} rows to {full_table_id}.", flush=True)
     except Exception as e:
         print(f"[ERROR] Failed to insert rows: {e}", flush=True)
 
@@ -211,6 +217,9 @@ def proportional_allocation(df_raw, mapping_df=None):
 # =================================================
 # BLOCK 8: MAIN FUNCTION (Updated for 6.5.13)
 # =================================================
+# =================================================
+# BLOCK 8: MAIN FUNCTION (Updated for 6.5.15)
+# =================================================
 def main():
     ensure_table(BQ_TABLE_RAW)
     df_new = fetch_searchappearance_data(START_DATE, END_DATE)
@@ -228,7 +237,7 @@ def main():
     # --- Apply allocation (currently only direct active, others as placeholder) ---
     df_alloc = direct_allocation(df_new)
 
-    # --- Fix: Keep only columns expected by Allocated table schema ---
+    # --- Keep only columns expected by Allocated table schema ---
     df_alloc = df_alloc[['SearchAppearance','TargetEntity','AllocationMethod','AllocationWeight',
                          'Clicks_alloc','Impressions_alloc','CTR_alloc','Position_alloc',
                          'fetch_id','unique_key']]
