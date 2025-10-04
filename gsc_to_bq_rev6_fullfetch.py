@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 # ============================================================
 # File: gsc_to_bq_rev6_fullfetch.py
-# Revision: Rev6.6.11 — Batch 7 = UN-KNOWN pages added
+# Revision: Rev6.6.12 — read existing_keys once; Duplicate-check enforced for Blocks B & C; logs improved
 # Purpose: Full fetch from GSC -> BigQuery with duplicate prevention and sitewide total batch
 # ============================================================
 
@@ -111,7 +111,6 @@ def get_existing_keys():
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
                 df = bq_client.query(query).to_dataframe()
-        print(f"[INFO] Retrieved {len(df)} existing keys from BigQuery.", flush=True)
         return set(df["unique_key"].astype(str).tolist())
     except Exception as e:
         print(f"[WARN] Failed to fetch existing keys: {e}", flush=True)
@@ -151,9 +150,8 @@ def upload_to_bq(df):
         return 0
 
 # ---------- FETCH GSC DATA ----------
-def fetch_gsc_data(start_date, end_date):
+def fetch_gsc_data(start_date, end_date, existing_keys):
     service = get_gsc_service()
-    existing_keys = get_existing_keys()
     all_new_rows = []
     total_new_count = 0
 
@@ -161,12 +159,29 @@ def fetch_gsc_data(start_date, end_date):
         ["date", "query", "page"],
         ["date", "query", "country"],
         ["date", "query", "device"],
-        ["date", "query"],
+        ["date", "query"],              # original Batch 4 in earlier versions
+        ["date", "page"],               # Batch 5 (page-only) — optional if you want to run as part of main flow
+        ["date", "query"],              # Batch 6 (query-only) — note: duplicate of one above if present; keep for completeness
     ]
 
+    # We'll keep original order mostly, but avoid double-inserting identical batch sets.
+    # (Above inclusion of ["date","query"] twice is intentional to preserve historical batch mapping —
+    # if undesired, remove duplicates.)
+
+    processed_signatures = set()  # avoid fetching same dims twice accidentally
+
     for i, dims in enumerate(DIMENSION_BATCHES, start=1):
+        dims_sig = ",".join(dims)
+        if dims_sig in processed_signatures:
+            continue
+        processed_signatures.add(dims_sig)
+
         start_row = 0
         batch_index = 1
+        fetched_total_for_batch = 0
+        new_total_for_batch = 0
+        inserted_total_for_batch = 0
+
         while True:
             print(f"[INFO] Batch {i}, dims {dims}: fetching data (startRow={start_row})...", flush=True)
             request = {
@@ -179,7 +194,7 @@ def fetch_gsc_data(start_date, end_date):
             try:
                 resp = service.searchanalytics().query(siteUrl=SITE_URL, body=request).execute()
             except Exception as e:
-                print(f"[ERROR] Timeout or error: {e}, retrying in {RETRY_DELAY} sec...", flush=True)
+                print(f"[ERROR] Timeout or error in Batch {i}: {e}, retrying in {RETRY_DELAY} sec...", flush=True)
                 time.sleep(RETRY_DELAY)
                 continue
 
@@ -190,6 +205,7 @@ def fetch_gsc_data(start_date, end_date):
 
             batch_new = []
             for r in rows:
+                fetched_total_for_batch += 1
                 keys = r.get("keys", [])
                 date = keys[0] if len(keys) > 0 else None
                 query = keys[1] if ("query" in dims and len(keys) > 1) else None
@@ -215,12 +231,14 @@ def fetch_gsc_data(start_date, end_date):
                     existing_keys.add(unique_key)
                     row["unique_key"] = unique_key
                     batch_new.append(row)
+                    new_total_for_batch += 1
 
             print(f"[INFO] Batch {i} (page {batch_index}): Fetched {len(rows)} rows, {len(batch_new)} new rows.", flush=True)
 
             if batch_new:
                 df_batch = pd.DataFrame(batch_new)
                 inserted = upload_to_bq(df_batch)
+                inserted_total_for_batch += inserted
                 total_new_count += inserted
                 all_new_rows.extend(batch_new)
 
@@ -229,20 +247,25 @@ def fetch_gsc_data(start_date, end_date):
                 break
             start_row += len(rows)
 
+        # Batch summary
+        print(f"[INFO] Batch {i} summary: fetched_total={fetched_total_for_batch}, new_candidates={new_total_for_batch}, inserted={inserted_total_for_batch}", flush=True)
+
     df_all_new = pd.DataFrame(all_new_rows)
     return df_all_new, total_new_count
 
 # ---------- A: FETCH SITEWIDE BATCH (ISOLATED) ----------
-def fetch_sitewide_batch(start_date, end_date):
+def fetch_sitewide_batch(start_date, end_date, existing_keys):
     print("[INFO] Running sitewide batch ['date']...", flush=True)
     service = get_gsc_service()
-    existing_keys = get_existing_keys()
     all_new_rows = []
     total_new_count = 0
 
     # ---------- Step 1: fetch actual GSC rows for ['date'] ----------
     start_row = 0
     batch_index = 1
+    fetched_total_for_batch = 0
+    inserted_total_for_batch = 0
+
     while True:
         request = {
             "startDate": start_date,
@@ -265,6 +288,7 @@ def fetch_sitewide_batch(start_date, end_date):
 
         batch_new = []
         for r in rows:
+            fetched_total_for_batch += 1
             keys = r.get("keys", [])
             date = keys[0] if len(keys) > 0 else None
 
@@ -291,6 +315,7 @@ def fetch_sitewide_batch(start_date, end_date):
         if batch_new:
             df_batch = pd.DataFrame(batch_new)
             inserted = upload_to_bq(df_batch)
+            inserted_total_for_batch += inserted
             total_new_count += inserted
             all_new_rows.extend(batch_new)
 
@@ -301,6 +326,7 @@ def fetch_sitewide_batch(start_date, end_date):
 
     # ---------- Step 2: add placeholder rows for missing dates ----------
     date_range = pd.date_range(start=start_date, end=end_date)
+    placeholders = []
     for dt in date_range:
         date_str = dt.strftime("%Y-%m-%d")
         if not any(row["Date"] == date_str for row in all_new_rows):
@@ -319,31 +345,30 @@ def fetch_sitewide_batch(start_date, end_date):
             if unique_key not in existing_keys:
                 existing_keys.add(unique_key)
                 placeholder_row["unique_key"] = unique_key
-                all_new_rows.append(placeholder_row)
+                placeholders.append(placeholder_row)
                 print(f"[INFO] Sitewide batch: adding placeholder for missing date {date_str}", flush=True)
 
-    # Insert all placeholders at once
-    placeholders_only = [row for row in all_new_rows if row["Clicks"] is None]
-    if placeholders_only:
-        df_placeholders = pd.DataFrame(placeholders_only)
+    if placeholders:
+        df_placeholders = pd.DataFrame(placeholders)
         inserted = upload_to_bq(df_placeholders)
+        inserted_total_for_batch += inserted
         total_new_count += inserted
+        all_new_rows.extend(placeholders)
 
-    print(f"[INFO] Sitewide batch done: {total_new_count} new rows inserted.", flush=True)
+    print(f"[INFO] Sitewide batch done: fetched_total={fetched_total_for_batch}, inserted={inserted_total_for_batch}", flush=True)
     return pd.DataFrame(all_new_rows), total_new_count
-
 
 # ---------- MAIN ----------
 def main():
     ensure_table()
     print(f"[INFO] Fetching data from {START_DATE} to {END_DATE}", flush=True)
 
-    # ---------- Check existing keys ----------
+    # ---------- Check existing keys (only once) ----------
     existing_keys = get_existing_keys()
     print(f"[INFO] Retrieved {len(existing_keys)} existing keys from BigQuery.", flush=True)
 
     # --- Normal FullFetch Batch (main pipeline) ---
-    df_new, total_inserted = fetch_gsc_data(START_DATE, END_DATE)
+    df_new, total_inserted = fetch_gsc_data(START_DATE, END_DATE, existing_keys)
 
     # ----------------------------
     # B. Fetch Batch 4: Date + Page (Page IS NOT NULL)
@@ -353,6 +378,9 @@ def main():
         service = get_gsc_service()
         start_row = 0
         all_rows = []
+        fetched_b4 = 0
+        new_b4 = 0
+        inserted_b4 = 0
 
         while True:
             request = {
@@ -368,6 +396,7 @@ def main():
                 break
 
             for r in rows:
+                fetched_b4 += 1
                 keys = r.get("keys", [])
                 if len(keys) == 2 and keys[1]:  # فقط صفحات non-null
                     row = {
@@ -381,11 +410,11 @@ def main():
                         "CTR": r.get("ctr", 0.0),
                         "Position": r.get("position", 0.0),
                     }
-                    unique_key = generate_unique_key(row)
-                    if unique_key not in existing_keys:
-                        existing_keys.add(unique_key)
-                        row["unique_key"] = unique_key
+                    row["unique_key"] = generate_unique_key(row)
+                    if row["unique_key"] not in existing_keys:
+                        existing_keys.add(row["unique_key"])
                         all_rows.append(row)
+                        new_b4 += 1
 
             if len(rows) < ROW_LIMIT:
                 break
@@ -393,10 +422,9 @@ def main():
 
         if all_rows:
             df_batch4 = pd.DataFrame(all_rows)
-            print(f"[INFO] Batch 4 fetched rows: {len(df_batch4)}", flush=True)
-            if not df_batch4.empty:
-                inserted = upload_to_bq(df_batch4)
-                print(f"[INFO] Batch 4: Inserted {inserted} new rows to BigQuery.", flush=True)
+            inserted = upload_to_bq(df_batch4)
+            inserted_b4 += inserted
+            print(f"[INFO] Batch 4 done: fetched={fetched_b4}, new={new_b4}, inserted={inserted_b4}", flush=True)
         else:
             print("[INFO] Batch 4: No non-null page rows found.", flush=True)
 
@@ -411,6 +439,9 @@ def main():
         service = get_gsc_service()
         start_row = 0
         unknown_rows = []
+        fetched_b7 = 0
+        new_b7 = 0
+        inserted_b7 = 0
 
         while True:
             request = {
@@ -426,8 +457,10 @@ def main():
                 break
 
             for r in rows:
+                fetched_b7 += 1
                 keys = r.get("keys", [])
-                if len(keys) == 2 and not keys[1]:  # Page = NULL
+                # capture rows where page key is explicitly empty/null
+                if len(keys) == 2 and (not keys[1]):
                     row = {
                         "Date": keys[0],
                         "Query": "__NO_INDEX__",
@@ -439,11 +472,11 @@ def main():
                         "CTR": r.get("ctr", 0.0),
                         "Position": r.get("position", 0.0),
                     }
-                    unique_key = generate_unique_key(row)
-                    if unique_key not in existing_keys:
-                        existing_keys.add(unique_key)
-                        row["unique_key"] = unique_key
+                    row["unique_key"] = generate_unique_key(row)
+                    if row["unique_key"] not in existing_keys:
+                        existing_keys.add(row["unique_key"])
                         unknown_rows.append(row)
+                        new_b7 += 1
 
             if len(rows) < ROW_LIMIT:
                 break
@@ -451,10 +484,9 @@ def main():
 
         if unknown_rows:
             df_batch7 = pd.DataFrame(unknown_rows)
-            print(f"[INFO] Batch 7 fetched rows: {len(df_batch7)}", flush=True)
-            if not df_batch7.empty:
-                inserted = upload_to_bq(df_batch7)
-                print(f"[INFO] Batch 7: Inserted {inserted} new rows to BigQuery.", flush=True)
+            inserted = upload_to_bq(df_batch7)
+            inserted_b7 += inserted
+            print(f"[INFO] Batch 7 Summary: fetched={fetched_b7}, new={new_b7}, inserted={inserted_b7}", flush=True)
         else:
             print("[INFO] Batch 7: No unknown-page rows found.", flush=True)
 
@@ -462,14 +494,14 @@ def main():
         print(f"[ERROR] Failed to fetch Batch 7 (Unknown Page): {e}", flush=True)
 
     # --- run isolated sitewide batch ---
-    df_site, total_site = fetch_sitewide_batch(START_DATE, END_DATE)
+    df_site, total_site = fetch_sitewide_batch(START_DATE, END_DATE, existing_keys)
 
-    total_all = total_inserted + total_site
+    total_all = total_inserted + total_site + (inserted_b4 if 'inserted_b4' in locals() else 0) + (inserted_b7 if 'inserted_b7' in locals() else 0)
 
-    if df_new.empty and df_site.empty:
+    if total_all == 0:
         print("[INFO] No new rows fetched from GSC.", flush=True)
     else:
-        print(f"[INFO] Total new rows fetched: {total_all}", flush=True)
+        print(f"[INFO] Total new rows fetched/inserted: {total_all}", flush=True)
 
     if CSV_TEST_FILE:
         try:
