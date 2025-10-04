@@ -161,7 +161,7 @@ def fetch_gsc_data(start_date, end_date):
         ["date", "query", "page"],
         ["date", "query", "country"],
         ["date", "query", "device"],
-        ["date", "query"],              # Batch 6 جدید
+        ["date", "query"],
     ]
 
     for i, dims in enumerate(DIMENSION_BATCHES, start=1):
@@ -303,7 +303,6 @@ def fetch_sitewide_batch(start_date, end_date):
     date_range = pd.date_range(start=start_date, end=end_date)
     for dt in date_range:
         date_str = dt.strftime("%Y-%m-%d")
-        # فقط برای تاریخ‌هایی که هیچ row واقعی نداشته‌اند
         if not any(row["Date"] == date_str for row in all_new_rows):
             placeholder_row = {
                 "Date": date_str,
@@ -323,7 +322,7 @@ def fetch_sitewide_batch(start_date, end_date):
                 all_new_rows.append(placeholder_row)
                 print(f"[INFO] Sitewide batch: adding placeholder for missing date {date_str}", flush=True)
 
-    # Insert all placeholders at once (داده واقعی قبلاً Insert شده)
+    # Insert all placeholders at once
     placeholders_only = [row for row in all_new_rows if row["Clicks"] is None]
     if placeholders_only:
         df_placeholders = pd.DataFrame(placeholders_only)
@@ -334,18 +333,24 @@ def fetch_sitewide_batch(start_date, end_date):
     return pd.DataFrame(all_new_rows), total_new_count
 
 
-# ----------------------------
-# B. Fetch Batch 4: Date + Page (Page IS NOT NULL)
-# ----------------------------
+# ---------- MAIN ----------
+def main():
+    ensure_table()
+    print(f"[INFO] Fetching data from {START_DATE} to {END_DATE}", flush=True)
+
+    # --- Normal FullFetch Batch (main pipeline) ---
+    df_new, total_inserted = fetch_gsc_data(START_DATE, END_DATE)
+
+    # ----------------------------
+    # B. Fetch Batch 4: Date + Page (Page IS NOT NULL)
+    # ----------------------------
     print("[INFO] Fetching Batch 4 (Date + Page, excluding NULL pages)...", flush=True)
-    df_batch4 = pd.DataFrame()
     try:
         data_batch4 = fetch_gsc_data(
             START_DATE,
             END_DATE,
             dimensions=["date", "page"],
         )
-        # فیلتر کردن رکوردهایی که Page ندارن
         filtered_rows = []
         for row in data_batch4:
             if "keys" in row and len(row["keys"]) == 2 and row["keys"][1]:
@@ -354,20 +359,16 @@ def fetch_sitewide_batch(start_date, end_date):
         if filtered_rows:
             df_batch4 = pd.DataFrame(filtered_rows)
             print(f"[INFO] Batch 4 fetched rows: {len(filtered_rows)}", flush=True)
-            if not df_batch4.empty:
-                insert_rows_to_bq(df_batch4)
+            insert_rows_to_bq(df_batch4)
         else:
             print("[INFO] Batch 4: No rows with non-null page found.", flush=True)
-
     except Exception as e:
         print(f"[ERROR] Failed to fetch Batch 4 (Date + Page): {e}", flush=True)
 
-
-# ----------------------------
-# C. Fetch Batch 7: Unknown Page Data (page IS NULL)
-# ----------------------------
+    # ----------------------------
+    # C. Fetch Batch 7: Unknown Page Data (page IS NULL)
+    # ----------------------------
     print("[INFO] Fetching Batch 7 (Unknown Page Data, where page is NULL)...", flush=True)
-    df_batch7 = pd.DataFrame()
     try:
         data_batch7 = fetch_gsc_data(
             START_DATE,
@@ -383,24 +384,11 @@ def fetch_sitewide_batch(start_date, end_date):
         if unknown_rows:
             df_batch7 = pd.DataFrame(unknown_rows)
             print(f"[INFO] Batch 7 fetched rows: {len(unknown_rows)}", flush=True)
-            if not df_batch7.empty:
-                insert_rows_to_bq(df_batch7)
+            insert_rows_to_bq(df_batch7)
         else:
             print("[INFO] Batch 7: No unknown-page rows found.", flush=True)
-
     except Exception as e:
         print(f"[ERROR] Failed to fetch Batch 7 (Unknown Page): {e}", flush=True)
-
-
-# --- run isolated sitewide batch ---
-df_site, total_site = fetch_sitewide_batch(START_DATE, END_DATE)
-
-
-# ---------- MAIN ----------
-def main():
-    ensure_table()
-    print(f"[INFO] Fetching data from {START_DATE} to {END_DATE}", flush=True)
-    df_new, total_inserted = fetch_gsc_data(START_DATE, END_DATE)
 
     # --- run isolated sitewide batch ---
     df_site, total_site = fetch_sitewide_batch(START_DATE, END_DATE)
@@ -421,6 +409,7 @@ def main():
             print(f"[WARN] Failed to write CSV test file: {e}", flush=True)
 
     print("[INFO] Finished.", flush=True)
+
 
 if __name__ == "__main__":
     main()
