@@ -1,6 +1,6 @@
 # =================================================
 # FILE: gsc_to_bq_searchappearance_fullfetch.py
-# REV: 6.5.6
+# REV: 6.5.7
 # PURPOSE: Full fetch SearchAppearance data from GSC to BigQuery
 #          with duplicate prevention using unique_key
 #          Only fix: ignore --csv-test argument to prevent crash
@@ -20,7 +20,7 @@ import argparse
 import warnings
 
 # ---------- CONFIG ----------
-SITE_URL = 'https://bamtabridsazan.com/'
+SITE_URL = "sc-domain:bamtabridsazan.com"
 BQ_PROJECT = 'bamtabridsazan'
 BQ_DATASET = 'seo_reports'
 BQ_TABLE = 'bamtabridsazan__gsc__raw_data_searchappearance'
