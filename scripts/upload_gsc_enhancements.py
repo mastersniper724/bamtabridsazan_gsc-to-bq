@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 # ============================================================
 # File: upload_gsc_enhancements.py
-# Revision: Rev.9 — Fixed all column & schema issues
+# Revision: Rev.10 — Fixed all column & schema issues
 # ============================================================
 
 import os
@@ -34,6 +34,15 @@ def parse_excel_file(file_path, enhancement_type):
             if matches:
                 return pd.read_excel(xls, sheet_name=matches[0])
             return None
+	
+	# Normalize column names
+	df.columns = [str(c).strip().lower().replace(" ", "_") for c in df.columns]
+	
+	# Ensure required columns exist
+	required_cols = ["date", "url", "item_name", "last_crawled", "site", "appearance_type", "status"]
+	for col in required_cols:
+		if col not in df.columns:
+	        df[col] = None
 
         chart_df = read_sheet("chart")
         table_df = read_sheet("table sheet")
