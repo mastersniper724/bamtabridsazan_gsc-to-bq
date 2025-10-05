@@ -178,6 +178,7 @@ def fetch_gsc_data(start_date, end_date, existing_keys):
         new_candidates_for_batch = 0
         while True:
             print(f"[INFO] Batch {i}, dims {dims}: fetching data (startRow={start_row})...", flush=True)
+            # پایه request بدون searchType
             request = {
                 "startDate": start_date,
                 "endDate": end_date,
@@ -185,55 +186,60 @@ def fetch_gsc_data(start_date, end_date, existing_keys):
                 "rowLimit": ROW_LIMIT,
                 "startRow": start_row,
             }
-            try:
-                resp = service.searchanalytics().query(siteUrl=SITE_URL, body=request).execute()
-            except Exception as e:
-                print(f"[ERROR] Timeout or error: {e}, retrying in {RETRY_DELAY} sec...", flush=True)
-                time.sleep(RETRY_DELAY)
-                continue
 
-            rows = resp.get("rows", [])
-            if not rows:
-                print(f"[INFO] Batch {i} no more rows (startRow={start_row}).", flush=True)
-                break
+            # حلقه روی searchType ها
+            for stype in ['image', 'video', 'news']:
+                request = request_base.copy()
+                request['searchType'] = stype
+                try:
+                    resp = service.searchanalytics().query(siteUrl=SITE_URL, body=request).execute()
+                except Exception as e:
+                    print(f"[ERROR] Timeout or error: {e}, retrying in {RETRY_DELAY} sec...", flush=True)
+                    time.sleep(RETRY_DELAY)
+                    continue
 
-            fetched_total_for_batch += len(rows)
-            batch_new = []
-            for r in rows:
-                keys = r.get("keys", [])
-                date = keys[0] if len(keys) > 0 else None
-                query = keys[1] if ("query" in dims and len(keys) > 1) else None
-                third = keys[2] if len(keys) > 2 else None
-                page = third if "page" in dims else None
-                country = third if "country" in dims else None
-                device = third if "device" in dims else None
+                rows = resp.get("rows", [])
+                if not rows:
+                    print(f"[INFO] Batch {i}, searchType={stype} no more rows.", flush=True)
+                    continue
 
-                row = {
-                    "Date": date,
-                    "Query": query,
-                    "Page": page,
-                    "Country": country,
-                    "Device": device,
-                    "Clicks": r.get("clicks", 0),
-                    "Impressions": r.get("impressions", 0),
-                    "CTR": r.get("ctr", 0.0),
-                    "Position": r.get("position", 0.0),
-                }
+                fetched_total_for_batch += len(rows)
+                batch_new = []
 
-                unique_key = generate_unique_key(row)
-                if unique_key not in existing_keys:
-                    existing_keys.add(unique_key)
-                    row["unique_key"] = unique_key
-                    batch_new.append(row)
+                for r in rows:
+                    keys = r.get("keys", [])
+                    date = keys[0] if len(keys) > 0 else None
+                    query = keys[1] if ("query" in dims and len(keys) > 1) else None
+                    third = keys[2] if len(keys) > 2 else None
+                    page = third if "page" in dims else None
+                    country = third if "country" in dims else None
+                    device = third if "device" in dims else None
 
-            new_candidates_for_batch += len(batch_new)
-            print(f"[INFO] Batch {i} (page {batch_index}): Fetched {len(rows)} rows, {len(batch_new)} new rows.", flush=True)
+                    row = {
+                        "Date": date,
+                        "Query": query,
+                        "Page": page,
+                        "Country": country,
+                        "Device": device,
+                        "Clicks": r.get("clicks", 0),
+                        "Impressions": r.get("impressions", 0),
+                        "CTR": r.get("ctr", 0.0),
+                        "Position": r.get("position", 0.0),
+                        "SearchType": stype,
+                    }
 
-            if batch_new:
-                df_batch = pd.DataFrame(batch_new)
-                inserted = upload_to_bq(df_batch)
-                total_inserted += inserted
-                all_new_rows.extend(batch_new)
+                    unique_key = generate_unique_key(row)
+                    if unique_key not in existing_keys:
+                        existing_keys.add(unique_key)
+                        row["unique_key"] = unique_key
+                        batch_new.append(row)
+
+                new_candidates_for_batch += len(batch_new)
+                if batch_new:
+                    df_batch = pd.DataFrame(batch_new)
+                    inserted = upload_to_bq(df_batch)
+                    total_inserted += inserted
+                    all_new_rows.extend(batch_new)
 
             batch_index += 1
             if len(rows) < ROW_LIMIT:
