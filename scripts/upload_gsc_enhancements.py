@@ -3,7 +3,7 @@
 # -*- coding: utf-8 -*-
 # ============================================================
 # File: upload_gsc_enhancements.py
-# Revision: Rev.4 — read existing_keys once; Duplicate-check enforced for Blocks B & C; logs improved
+# Revision: Rev.5 — read existing_keys once; Duplicate-check enforced for Blocks B & C; logs improved
 # Purpose: Full fetch from GSC -> BigQuery with duplicate prevention and sitewide total batch
 # ============================================================
 
@@ -11,6 +11,7 @@ import os
 import re
 import pandas as pd
 from google.cloud import bigquery
+from google.cloud.bigquery import SchemaField
 
 # ===============================
 # تنظیمات اصلی
@@ -80,11 +81,14 @@ def ensure_table_exists():
     except Exception:
         print(f"⚙️ Table {dataset_id}.{table_id} not found. Creating...")
         schema = [
-            SchemaField("site", "STRING"),
-            SchemaField("appearance_type", "STRING"),
-            SchemaField("status", "STRING"),
-            SchemaField("checked_date", "DATE"),
-            SchemaField("unique_key", "STRING"),
+            SchemaField("date", "DATE"),             # ستون تاریخ از Chart sheet
+            SchemaField("url", "STRING"),            # ستون URL از Table sheet
+            SchemaField("item_name", "STRING"),      # ستون Item name از Table sheet
+            SchemaField("last_crawled", "DATE"),    # ستون Last crawled از Table sheet
+            SchemaField("site", "STRING"),           # ثابت یا گرفته شده از نام دامنه
+            SchemaField("appearance_type", "STRING"),# Breadcrumb / FAQ / Recipe و غیره
+            SchemaField("status", "STRING"),         # Valid / Invalid یا مشابه
+            SchemaField("unique_key", "STRING"),     # hash یا ترکیب یکتا
         ]
         table = bigquery.Table(table_ref, schema=schema)
         client.create_table(table)
