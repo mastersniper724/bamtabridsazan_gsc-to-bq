@@ -241,10 +241,10 @@ def fetch_gsc_data(start_date, end_date, existing_keys):
                     total_inserted += inserted
                     all_new_rows.extend(batch_new)
 
-            batch_index += 1
-            if len(rows) < ROW_LIMIT:
-                break
-            start_row += len(rows)
+                batch_index += 1
+                if len(rows) < ROW_LIMIT:
+                    break
+                start_row += len(rows)
 
         print(f"[INFO] Batch {i} summary: fetched_total={fetched_total_for_batch}, new_candidates={new_candidates_for_batch}, inserted={0 if fetched_total_for_batch==0 else 'see per-page logs'}", flush=True)
         total_fetched_overall += fetched_total_for_batch
