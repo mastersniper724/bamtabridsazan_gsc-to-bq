@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 # ============================================================
 # File: gsc_to_bq_othersearchtypes_fullfetch.py
-# Revision: Rev0
+# Revision: Rev.4
 # Purpose: Full fetch from GSC -> for Image / Video / News Search Types
 # ============================================================
 
@@ -282,19 +282,17 @@ def fetch_noindex_batch(start_date, end_date, existing_keys):
                 print(f"[ERROR] No-Index batch error: {e}, retrying in {RETRY_DELAY} sec...", flush=True)
                 time.sleep(RETRY_DELAY)
                 continue
-    
+
             rows = resp.get("rows", [])
             if not rows:
-                break
+                continue
 
             fetched_total += len(rows)
             for r in rows:
                 keys = r.get("keys", [])
-                # Expect keys = [date, page] for this dims
                 if len(keys) == 2:
                     page_val = keys[1]
                     if (page_val is None) or (str(page_val).strip() == ""):
-                        # this is a no-index-like record (page NULL/empty)
                         row = {
                             "Date": keys[0],
                             "Query": "__NO_INDEX__",
@@ -313,17 +311,16 @@ def fetch_noindex_batch(start_date, end_date, existing_keys):
                             noindex_rows.append(row)
                             new_candidates += 1
 
-        if len(rows) < ROW_LIMIT:
-            break
-        start_row += len(rows)
+            if len(rows) < ROW_LIMIT:
+                break
+            start_row += len(rows)
 
-    inserted = 0
     if noindex_rows:
         df_noindex = pd.DataFrame(noindex_rows)
         inserted = upload_to_bq(df_noindex)
-
-    print(f"[INFO] No-Index batch summary: fetched_total={fetched_total}, new_candidates={new_candidates}, inserted={inserted}", flush=True)
-    return pd.DataFrame(noindex_rows), inserted
+        print(f"[INFO] No-Index batch: fetched={fetched_total}, new_candidates={new_candidates}, inserted={inserted}", flush=True)
+    else:
+        print(f"[INFO] No-Index batch: no new rows found.", flush=True)
 
 # ---------- A: FETCH SITEWIDE BATCH (ISOLATED) ----------
 def fetch_sitewide_batch(start_date, end_date, existing_keys):
