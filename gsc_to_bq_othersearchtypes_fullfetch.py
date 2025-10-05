@@ -196,7 +196,7 @@ def fetch_gsc_data(start_date, end_date, existing_keys):
                 except Exception as e:
                     print(f"[ERROR] Timeout or error: {e}, retrying in {RETRY_DELAY} sec...", flush=True)
                     time.sleep(RETRY_DELAY)
-                    continue
+                continue
 
                 rows = resp.get("rows", [])
                 if not rows:
@@ -281,7 +281,7 @@ def fetch_noindex_batch(start_date, end_date, existing_keys):
             except Exception as e:
                 print(f"[ERROR] No-Index batch error: {e}, retrying in {RETRY_DELAY} sec...", flush=True)
                 time.sleep(RETRY_DELAY)
-                continue
+            continue
     
             rows = resp.get("rows", [])
             if not rows:
