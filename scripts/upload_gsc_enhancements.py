@@ -64,6 +64,33 @@ def create_unique_key(df, columns):
     return df
 
 # ===============================
+# بررسی وجود جدول در / ایجاد آن BQ
+# ===============================
+def ensure_table_exists():
+    """Create the target BigQuery table if it doesn't exist."""
+    from google.cloud.bigquery import SchemaField
+
+    dataset_id = "seo_reports"
+    table_id = "bamtabridsazan__gsc__raw_enhancements"
+    table_ref = client.dataset(dataset_id).table(table_id)
+
+    try:
+        client.get_table(table_ref)
+        print(f"✅ Table {dataset_id}.{table_id} already exists.")
+    except Exception:
+        print(f"⚙️ Table {dataset_id}.{table_id} not found. Creating...")
+        schema = [
+            SchemaField("site", "STRING"),
+            SchemaField("appearance_type", "STRING"),
+            SchemaField("status", "STRING"),
+            SchemaField("checked_date", "DATE"),
+            SchemaField("unique_key", "STRING"),
+        ]
+        table = bigquery.Table(table_ref, schema=schema)
+        client.create_table(table)
+        print(f"✅ Table {dataset_id}.{table_id} created successfully.")
+
+# ===============================
 # دریافت کلیدهای موجود از BQ
 # ===============================
 def get_existing_unique_keys():
@@ -83,6 +110,7 @@ def append_to_bigquery(df):
 # ===============================
 # تابع اصلی
 # ===============================
+ensure_table_exists()
 def main():
     all_new_records = []
     existing_keys = get_existing_unique_keys()
