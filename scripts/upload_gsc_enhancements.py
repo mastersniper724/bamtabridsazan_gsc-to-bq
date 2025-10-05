@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 # ============================================================
 # File: upload_gsc_enhancements.py
-# Revision: Rev.12 — Fixed all column & schema issues
+# Revision: Rev.13 — Fixed all column & schema issues
 # ============================================================
 
 import os
@@ -223,7 +223,10 @@ def main():
             enhancement_type = enhancement_folder
             print(f"📄 Processing {file_path}")
 
-            chart_df, table_df, metadata_df = parse_excel_file(file_path, enhancement_type)
+            site = "bamtabridsazan.com"  # یا هر دامنه‌ای که داری
+	    appearance_type = enhancement_folder  # چون اسم فولدر نوع enhancement هست
+	    chart_df = parse_excel_file(file_path, site, appearance_type)
+	    df = parse_excel_file(file_path, site, appearance_type)
 
             for df in [chart_df, table_df, metadata_df]:
                 if df is None or df.empty:
