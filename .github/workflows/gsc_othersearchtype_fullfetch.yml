@@ -15,7 +15,7 @@ on:
         description: 'Enable debug mode'
         required: false
         default: 'false'
-  schedule:
+#  schedule:
     # GitHub Actions uses UTC → 22:30 UTC = 02:00 Tehran time
 #    - cron: '30 22 * * *'
     
