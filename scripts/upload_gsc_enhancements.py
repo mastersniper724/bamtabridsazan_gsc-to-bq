@@ -2,7 +2,8 @@
 # -*- coding: utf-8 -*-
 # ============================================================
 # File: upload_gsc_enhancements.py
-# Revision: Rev.14 — Fixed all column & schema issues
+# Revision: Rev.15 — Chart sheet ignored; parse_excel_file updated; all structure preserved
+# Purpose: Full fetch from GSC -> BigQuery with duplicate prevention
 # ============================================================
 
 import os
@@ -16,126 +17,49 @@ from google.cloud.bigquery import SchemaField
 PROJECT_ID = "bamtabridsazan"
 DATASET_ID = "seo_reports"
 TABLE_ID = "bamtabridsazan__gsc__raw_enhancements"
-GITHUB_LOCAL_PATH = "gsc_enhancements"
+GITHUB_LOCAL_PATH = "gsc_enhancements"  # مسیر ریشه فولدر
 UNIQUE_KEY_COLUMNS = ["url", "item_name", "last_crawled", "enhancement_type"]
 
 client = bigquery.Client(project=PROJECT_ID)
 
 # ===============================
-# تابع استخراج داده از فایل اکسل (ویرایش ۱۰)
+# تابع استخراج داده از فایل اکسل (فقط Table و Metadata)
 # ===============================
-def parse_excel_file(file_path, site, appearance_type):
-    """
-    Parse Excel file and extract normalized data for BigQuery.
-    - Handles case-insensitive sheet names (Chart / Table)
-    - Normalizes column names (lowercase, underscores)
-    - Ensures all required columns exist
-    """
-
+def parse_excel_file(file_path, enhancement_type, appearance_type):
     try:
-        # 🔹 باز کردن فایل اکسل و لیست شیت‌ها
-        wb = load_workbook(file_path, data_only=True)
-        sheet_names = [s.lower() for s in wb.sheetnames]
+        xls = pd.ExcelFile(file_path)
 
-        # 🔹 پیدا کردن نام دقیق شیت‌ها (case-insensitive)
-        chart_sheet_name = None
-        table_sheet_name = None
-        for s in wb.sheetnames:
-            sl = s.lower()
-            if "chart" in sl:
-                chart_sheet_name = s
-            elif "table" in sl:
-                table_sheet_name = s
+        table_sheet = None
+        metadata_sheet = None
 
-        if not chart_sheet_name and not table_sheet_name:
-            raise ValueError("No Chart or Table sheet found in file.")
+        # جستجوی case-insensitive برای شیت‌ها
+        for sheet in xls.sheet_names:
+            lower = sheet.strip().lower()
+            if lower == "table sheet" or lower == "table":
+                table_sheet = sheet
+            elif lower == "metadata":
+                metadata_sheet = sheet
 
-        records = []
+        table_df = pd.read_excel(xls, table_sheet) if table_sheet else pd.DataFrame()
+        metadata_df = pd.read_excel(xls, metadata_sheet) if metadata_sheet else pd.DataFrame()
 
-        # 🔹 پردازش شیت Chart (در صورت وجود)
-        if chart_sheet_name:
-            df_chart = pd.read_excel(file_path, sheet_name=chart_sheet_name)
+        # اضافه کردن ستون enhancement_type
+        if not table_df.empty:
+            table_df["enhancement_type"] = enhancement_type
+        if not metadata_df.empty:
+            metadata_df["enhancement_type"] = enhancement_type
 
-            # نرمال‌سازی نام ستون‌ها
-            df_chart.columns = [str(c).strip().lower().replace(" ", "_") for c in df_chart.columns]
+        # پاک‌سازی نام ستون‌ها
+        if not table_df.empty:
+            table_df.columns = table_df.columns.str.strip()
+        if not metadata_df.empty:
+            metadata_df.columns = metadata_df.columns.str.strip()
 
-            # اطمینان از وجود ستون date
-            if "date" not in df_chart.columns:
-                raise ValueError(f"'date' column not found in Chart sheet: {chart_sheet_name}")
-
-            # فقط ستون تاریخ رو نگه می‌داریم
-            df_chart = df_chart[["date"]].dropna(subset=["date"])
-            df_chart["date"] = pd.to_datetime(df_chart["date"], errors="coerce").dt.date
-
-            chart_dates = df_chart["date"].dropna().unique().tolist()
-        else:
-            chart_dates = []
-
-        # 🔹 پردازش شیت Table (در صورت وجود)
-        if table_sheet_name:
-            df_table = pd.read_excel(file_path, sheet_name=table_sheet_name)
-            df_table.columns = [str(c).strip().lower().replace(" ", "_") for c in df_table.columns]
-
-            # تعریف ستون‌های موردنیاز
-            required_cols = ["url", "item_name", "last_crawled", "status"]
-            for col in required_cols:
-                if col not in df_table.columns:
-                    df_table[col] = None
-
-            df_table["last_crawled"] = pd.to_datetime(df_table["last_crawled"], errors="coerce").dt.date
-
-            # اگر شیت Chart تاریخ دارد، همه سطرها را برای آن تاریخ‌ها تکثیر می‌کنیم
-            if chart_dates:
-                for d in chart_dates:
-                    for _, row in df_table.iterrows():
-                        records.append({
-                            "date": d,
-                            "url": row.get("url"),
-                            "item_name": row.get("item_name"),
-                            "last_crawled": row.get("last_crawled"),
-                            "site": site,
-                            "appearance_type": appearance_type,
-                            "status": row.get("status"),
-                        })
-            else:
-                # در صورت نبودن chart_dates، فقط داده‌های table را بدون تاریخ می‌فرستیم
-                for _, row in df_table.iterrows():
-                    records.append({
-                        "date": None,
-                        "url": row.get("url"),
-                        "item_name": row.get("item_name"),
-                        "last_crawled": row.get("last_crawled"),
-                        "site": site,
-                        "appearance_type": appearance_type,
-                        "status": row.get("status"),
-                    })
-
-        # 🔹 تبدیل به DataFrame نهایی
-        if not records:
-            raise ValueError("No records extracted from file.")
-
-        df = pd.DataFrame(records)
-
-        # نرمال‌سازی نهایی نام ستون‌ها
-        df.columns = [str(c).strip().lower().replace(" ", "_") for c in df.columns]
-
-        # اطمینان از وجود همه ستون‌ها برای اسکیما BQ
-        all_cols = ["date", "url", "item_name", "last_crawled", "site", "appearance_type", "status", "unique_key"]
-        for col in all_cols:
-            if col not in df.columns:
-                df[col] = None
-
-        # ساخت unique_key
-        df["unique_key"] = df.apply(
-            lambda r: f"{r['site']}_{r['appearance_type']}_{r['url']}_{r['item_name']}_{r['date']}", axis=1
-        )
-
-        return df
+        return table_df, metadata_df
 
     except Exception as e:
-        print(f"❌ Error parsing {file_path}: {e}")
-        return pd.DataFrame(columns=["date", "url", "item_name", "last_crawled", "site", "appearance_type", "status", "unique_key"])
-
+        print(f"❌ Failed to parse {file_path}: {e}")
+        return pd.DataFrame(), pd.DataFrame()
 
 # ===============================
 # تابع ایجاد Unique Key
@@ -146,7 +70,7 @@ def create_unique_key(df, columns):
     return df
 
 # ===============================
-# بررسی وجود جدول در / ایجاد آن BQ
+# بررسی وجود جدول در BQ / ایجاد آن
 # ===============================
 def ensure_table_exists():
     table_ref = client.dataset(DATASET_ID).table(TABLE_ID)
@@ -181,17 +105,10 @@ def get_existing_unique_keys():
 # آپلود داده جدید به BQ
 # ===============================
 def append_to_bigquery(df):
-    # تبدیل ستون‌های تاریخ به DATE
-    for date_col in ["date", "last_crawled"]:
-        if date_col in df.columns:
-            df[date_col] = pd.to_datetime(df[date_col], errors="coerce").dt.date
-
-    # مرتب‌سازی و اضافه کردن ستون‌های گمشده مطابق اسکیما
-    schema_cols = ["date", "url", "item_name", "last_crawled", "site", "appearance_type", "status", "unique_key"]
-    for col in schema_cols:
-        if col not in df.columns:
-            df[col] = None
-    df = df[schema_cols]
+    if 'date' in df.columns:
+        df['date'] = pd.to_datetime(df['date'], errors='coerce').dt.date
+    if 'last_crawled' in df.columns:
+        df['last_crawled'] = pd.to_datetime(df['last_crawled'], errors='coerce').dt.date
 
     job_config = bigquery.LoadJobConfig(write_disposition="WRITE_APPEND")
     job = client.load_table_from_dataframe(df, f"{PROJECT_ID}.{DATASET_ID}.{TABLE_ID}", job_config=job_config)
@@ -199,62 +116,68 @@ def append_to_bigquery(df):
     print(f"✅ Uploaded {len(df)} new rows")
 
 # ===============================
-# دریافت فایل اکسل
+# ستون‌های معتبر مطابق BQ
 # ===============================
-ensure_table_exists()
-def get_excel_files(folder_path):
-    excel_files = []
-    for root, _, files in os.walk(folder_path):
-        for file in files:
-            if file.endswith(".xlsx"):
-                excel_files.append(os.path.join(root, file))
-    return excel_files
-
 VALID_COLUMNS = ["date", "url", "item_name", "last_crawled", "site", "appearance_type", "status", "unique_key"]
 
 # ===============================
 # تابع اصلی
 # ===============================
+ensure_table_exists()
+
 def main():
-    enhancement_folder = "enhancements"
-    enhancement_files = get_excel_files(enhancement_folder)
-
     all_new_records = []
-    existing_keys = load_existing_unique_keys()
+    existing_keys = get_existing_unique_keys()
+    print(f"🔹 Loaded {len(existing_keys)} existing unique keys")
 
-    for file_path in enhancement_files:
-        site = "bamtabridsazan.com"   # دامنه سایت
-        appearance_type = enhancement_folder  # نوع Enhancement
-
-        df = parse_excel_file(file_path, site, appearance_type)
-        if df is None or df.empty:
+    for enhancement_folder in os.listdir(GITHUB_LOCAL_PATH):
+        folder_path = os.path.join(GITHUB_LOCAL_PATH, enhancement_folder)
+        if not os.path.isdir(folder_path):
             continue
 
-        # نرمال‌سازی نام ستون‌ها
-        df.columns = [c.strip().lower().replace(" ", "_") for c in df.columns]
+        for file_name in os.listdir(folder_path):
+            if not file_name.endswith(".xlsx"):
+                continue
 
-        # اطمینان از وجود ستون‌های لازم
-        for col in ["url", "item_name", "last_crawled"]:
-            if col not in df.columns:
-                df[col] = None
+            file_path = os.path.join(folder_path, file_name)
+            enhancement_type = enhancement_folder
+            appearance_type = enhancement_folder  # در صورت نیاز
 
-        # ساخت unique key
-        df = create_unique_key(df, ["url", "item_name", "last_crawled", "appearance_type"])
+            print(f"📄 Processing {file_path}")
 
-        # فیلتر رکوردهای جدید
-        new_df = df[~df["unique_key"].isin(existing_keys)]
-        existing_keys.update(new_df["unique_key"].tolist())
+            table_df, metadata_df = parse_excel_file(file_path, enhancement_type, appearance_type)
 
-        if not new_df.empty:
-            all_new_records.append(new_df)
+            for df in [table_df, metadata_df]:
+                if df.empty:
+                    continue
 
-    # ✅ این بخش رو دقیقاً همین‌طوری نگه دار
+                # نرمال‌سازی ستون‌ها
+                df.columns = [c.strip().lower().replace(" ", "_") for c in df.columns]
+
+                # اطمینان از ستون‌های لازم
+                for col in ["url", "item_name", "last_crawled"]:
+                    if col not in df.columns:
+                        df[col] = None
+
+                # ساخت unique_key
+                df = create_unique_key(df, ["url", "item_name", "last_crawled", "enhancement_type"])
+
+                # فیلتر رکوردهای جدید
+                new_df = df[~df["unique_key"].isin(existing_keys)]
+                existing_keys.update(new_df["unique_key"].tolist())
+
+                if not new_df.empty:
+                    # فقط ستون‌های معتبر را نگه دار
+                    new_df = new_df[[col for col in VALID_COLUMNS if col in new_df.columns]]
+
+                    all_new_records.append(new_df)
+
+    # آپلود نهایی
     if all_new_records:
         final_df = pd.concat(all_new_records, ignore_index=True)
         append_to_bigquery(final_df)
     else:
         print("⚠️ No new records found.")
-
 
 if __name__ == "__main__":
     main()
