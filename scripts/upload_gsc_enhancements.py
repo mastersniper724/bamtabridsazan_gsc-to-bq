@@ -106,6 +106,10 @@ def get_existing_unique_keys():
 # آپلود داده جدید به BQ
 # ===============================
 def append_to_bigquery(df):
+    # تبدیل ستون date به نوع DATE مناسب برای BigQuery
+    if 'date' in df.columns:
+        df['date'] = pd.to_datetime(df['date'], errors='coerce').dt.date
+
     job_config = bigquery.LoadJobConfig(write_disposition="WRITE_APPEND")
     job = client.load_table_from_dataframe(df, f"{PROJECT_ID}.{DATASET_ID}.{TABLE_ID}", job_config=job_config)
     job.result()
