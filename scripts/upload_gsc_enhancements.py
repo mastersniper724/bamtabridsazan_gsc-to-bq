@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 # ============================================================
 # File: upload_gsc_enhancements.py
-# Revision: Rev.13 — Fixed all column & schema issues
+# Revision: Rev.14 — Fixed all column & schema issues
 # ============================================================
 
 import os
@@ -199,11 +199,22 @@ def append_to_bigquery(df):
     print(f"✅ Uploaded {len(df)} new rows")
 
 # ===============================
-# تابع اصلی
+# دریافت فایل اکسل
 # ===============================
 ensure_table_exists()
+def get_excel_files(folder_path):
+    excel_files = []
+    for root, _, files in os.walk(folder_path):
+        for file in files:
+            if file.endswith(".xlsx"):
+                excel_files.append(os.path.join(root, file))
+    return excel_files
 
 VALID_COLUMNS = ["date", "url", "item_name", "last_crawled", "site", "appearance_type", "status", "unique_key"]
+
+# ===============================
+# تابع اصلی
+# ===============================
 def main():
     enhancement_folder = "enhancements"
     enhancement_files = get_excel_files(enhancement_folder)
