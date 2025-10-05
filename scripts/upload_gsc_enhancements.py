@@ -3,7 +3,7 @@
 # -*- coding: utf-8 -*-
 # ============================================================
 # File: upload_gsc_enhancements.py
-# Revision: Rev.6 — read existing_keys once; Duplicate-check enforced for Blocks B & C; logs improved
+# Revision: Rev.7 — read existing_keys once; Duplicate-check enforced for Blocks B & C; logs improved
 # Purpose: Full fetch from GSC -> BigQuery with duplicate prevention and sitewide total batch
 # ============================================================
 
@@ -119,6 +119,10 @@ def append_to_bigquery(df):
 # تابع اصلی
 # ===============================
 ensure_table_exists()
+
+# ستون‌های معتبر مطابق جدول BQ
+VALID_COLUMNS = ["site", "appearance_type", "status", "unique_key", "url", "item_name", "last_crawled"]
+
 def main():
     all_new_records = []
     existing_keys = get_existing_unique_keys()
@@ -140,7 +144,6 @@ def main():
 
             chart_df, table_df, metadata_df = parse_excel_file(file_path, enhancement_type)
 
-            # هر فایل ممکن است چند شیت داشته باشد
             for df in [chart_df, table_df, metadata_df]:
                 if df is None or df.empty:
                     continue
@@ -153,6 +156,11 @@ def main():
                     if col not in df.columns:
                         df[col] = None
 
+                # اضافه کردن ستون enhancement_type
+                if "enhancement_type" not in df.columns:
+                    df["enhancement_type"] = enhancement_type
+
+                # ساخت unique_key
                 df = create_unique_key(df, ["url", "item_name", "last_crawled", "enhancement_type"])
 
                 # فیلتر رکوردهای جدید
@@ -160,6 +168,14 @@ def main():
                 existing_keys.update(new_df["unique_key"].tolist())
 
                 if not new_df.empty:
+                    # فقط ستون‌های معتبر را نگه دار
+                    new_df = new_df[[col for col in VALID_COLUMNS if col in new_df.columns]]
+
+                    # تبدیل ستون‌های تاریخ به DATE
+                    for date_col in ["last_crawled"]:
+                        if date_col in new_df.columns:
+                            new_df[date_col] = pd.to_datetime(new_df[date_col], errors="coerce").dt.date
+
                     all_new_records.append(new_df)
 
     # آپلود نهایی
@@ -171,3 +187,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
