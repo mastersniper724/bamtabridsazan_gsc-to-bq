@@ -17,7 +17,7 @@ on:
         default: 'false'
   schedule:
     # GitHub Actions uses UTC → 22:30 UTC = 02:00 Tehran time
-    - cron: '30 22 * * *'
+#    - cron: '30 22 * * *'
     
 
 jobs:
