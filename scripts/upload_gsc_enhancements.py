@@ -22,44 +22,33 @@ UNIQUE_KEY_COLUMNS = ["url", "item_name", "last_crawled", "enhancement_type"]
 client = bigquery.Client(project=PROJECT_ID)
 
 # ===============================
-# تابع استخراج داده از فایل اکسل
+# تابع استخراج داده از فایل اکسل (ویرایش ۱۰)
 # ===============================
 def parse_excel_file(file_path, enhancement_type):
     try:
         xls = pd.ExcelFile(file_path)
-        # نرمال‌سازی نام شیت‌ها
-        sheet_names = [s.strip().lower() for s in xls.sheet_names]
+        sheet_names = [s.strip().lower() for s in xls.sheet_names]  # تبدیل همه اسم‌ها به lower
 
-        chart_df = None
-        table_df = None
-        metadata_df = None
+        def read_sheet(name_substr):
+            matches = [s for s in xls.sheet_names if s.strip().lower() == name_substr.lower()]
+            if matches:
+                return pd.read_excel(xls, sheet_name=matches[0])
+            return None
 
-        if any("chart" in s for s in sheet_names):
-            chart_sheet = next(s for s in sheet_names if "chart" in s)
-            chart_df = pd.read_excel(xls, sheet_name=chart_sheet)
-        if any("table" in s for s in sheet_names):
-            table_sheet = next(s for s in sheet_names if "table" in s)
-            table_df = pd.read_excel(xls, sheet_name=table_sheet)
-        if any("metadata" in s for s in sheet_names):
-            metadata_sheet = next(s for s in sheet_names if "metadata" in s)
-            metadata_df = pd.read_excel(xls, sheet_name=metadata_sheet)
+        chart_df = read_sheet("chart")
+        table_df = read_sheet("table sheet")
+        metadata_df = read_sheet("metadata")
 
         # اضافه کردن ستون Enhancement Type
         for df in [chart_df, table_df, metadata_df]:
             if df is not None:
                 df["enhancement_type"] = enhancement_type
-                # نرمال‌سازی ستون‌ها به lowercase و زیرخط
-                df.columns = [c.strip().lower().replace(" ", "_") for c in df.columns]
-                # اطمینان از وجود ستون‌های اصلی
-                for col in ["date", "url", "item_name", "last_crawled"]:
-                    if col not in df.columns:
-                        df[col] = None
 
         return chart_df, table_df, metadata_df
-
     except Exception as e:
         print(f"❌ Error parsing {file_path}: {e}")
         return None, None, None
+
 
 # ===============================
 # تابع ایجاد Unique Key
