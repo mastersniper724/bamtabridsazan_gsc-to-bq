@@ -204,56 +204,46 @@ def append_to_bigquery(df):
 ensure_table_exists()
 
 VALID_COLUMNS = ["date", "url", "item_name", "last_crawled", "site", "appearance_type", "status", "unique_key"]
-
 def main():
-    all_new_records = []
-    existing_keys = get_existing_unique_keys()
-    print(f"🔹 Loaded {len(existing_keys)} existing unique keys")
+    enhancement_folder = "enhancements"
+    enhancement_files = get_excel_files(enhancement_folder)
 
-    for enhancement_folder in os.listdir(GITHUB_LOCAL_PATH):
-        folder_path = os.path.join(GITHUB_LOCAL_PATH, enhancement_folder)
-        if not os.path.isdir(folder_path):
+    all_new_records = []
+    existing_keys = load_existing_unique_keys()
+
+    for file_path in enhancement_files:
+        site = "bamtabridsazan.com"   # دامنه سایت
+        appearance_type = enhancement_folder  # نوع Enhancement
+
+        df = parse_excel_file(file_path, site, appearance_type)
+        if df is None or df.empty:
             continue
 
-        for file_name in os.listdir(folder_path):
-            if not file_name.endswith(".xlsx"):
-                continue
+        # نرمال‌سازی نام ستون‌ها
+        df.columns = [c.strip().lower().replace(" ", "_") for c in df.columns]
 
-            file_path = os.path.join(folder_path, file_name)
-            enhancement_type = enhancement_folder
-            print(f"📄 Processing {file_path}")
+        # اطمینان از وجود ستون‌های لازم
+        for col in ["url", "item_name", "last_crawled"]:
+            if col not in df.columns:
+                df[col] = None
 
-            site = "bamtabridsazan.com"  # یا هر دامنه‌ای که داری
-	    appearance_type = enhancement_folder  # چون اسم فولدر نوع enhancement هست
-	    chart_df = parse_excel_file(file_path, site, appearance_type)
-	    df = parse_excel_file(file_path, site, appearance_type)
+        # ساخت unique key
+        df = create_unique_key(df, ["url", "item_name", "last_crawled", "appearance_type"])
 
-            for df in [chart_df, table_df, metadata_df]:
-                if df is None or df.empty:
-                    continue
+        # فیلتر رکوردهای جدید
+        new_df = df[~df["unique_key"].isin(existing_keys)]
+        existing_keys.update(new_df["unique_key"].tolist())
 
-                df.columns = [c.strip().lower().replace(" ", "_") for c in df.columns]
+        if not new_df.empty:
+            all_new_records.append(new_df)
 
-                for col in ["url", "item_name", "last_crawled", "date", "site", "appearance_type", "status"]:
-                    if col not in df.columns:
-                        df[col] = None
-
-                df = create_unique_key(df, UNIQUE_KEY_COLUMNS)
-                new_df = df[~df["unique_key"].isin(existing_keys)]
-                existing_keys.update(new_df["unique_key"].tolist())
-
-                if not new_df.empty:
-                    new_df = new_df[[col for col in VALID_COLUMNS if col in new_df.columns]]
-                    for date_col in ["date", "last_crawled"]:
-                        if date_col in new_df.columns:
-                            new_df[date_col] = pd.to_datetime(new_df[date_col], errors="coerce").dt.date
-                    all_new_records.append(new_df)
-
+    # ✅ این بخش رو دقیقاً همین‌طوری نگه دار
     if all_new_records:
         final_df = pd.concat(all_new_records, ignore_index=True)
         append_to_bigquery(final_df)
     else:
         print("⚠️ No new records found.")
+
 
 if __name__ == "__main__":
     main()
