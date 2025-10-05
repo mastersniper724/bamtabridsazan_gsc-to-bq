@@ -1,14 +1,11 @@
-
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 # ============================================================
 # File: upload_gsc_enhancements.py
-# Revision: Rev.7 — read existing_keys once; Duplicate-check enforced for Blocks B & C; logs improved
-# Purpose: Full fetch from GSC -> BigQuery with duplicate prevention and sitewide total batch
+# Revision: Rev.8 — Fixed all column & schema issues
 # ============================================================
 
 import os
-import re
 import pandas as pd
 from google.cloud import bigquery
 from google.cloud.bigquery import SchemaField
@@ -19,7 +16,7 @@ from google.cloud.bigquery import SchemaField
 PROJECT_ID = "bamtabridsazan"
 DATASET_ID = "seo_reports"
 TABLE_ID = "bamtabridsazan__gsc__raw_enhancements"
-GITHUB_LOCAL_PATH = "gsc_enhancements"  # مسیر ریشه فولدر
+GITHUB_LOCAL_PATH = "gsc_enhancements"
 UNIQUE_KEY_COLUMNS = ["url", "item_name", "last_crawled", "enhancement_type"]
 
 client = bigquery.Client(project=PROJECT_ID)
@@ -32,24 +29,13 @@ def parse_excel_file(file_path, enhancement_type):
         xls = pd.ExcelFile(file_path)
         sheets = xls.sheet_names
 
-        chart_df = None
-        table_df = None
-        metadata_df = None
+        chart_df = pd.read_excel(xls, "Chart") if "Chart" in sheets else None
+        table_df = pd.read_excel(xls, "Table sheet") if "Table sheet" in sheets else None
+        metadata_df = pd.read_excel(xls, "Metadata") if "Metadata" in sheets else None
 
-        if "Chart" in sheets:
-            chart_df = pd.read_excel(xls, "Chart")
-        if "Table sheet" in sheets:
-            table_df = pd.read_excel(xls, "Table sheet")
-        if "Metadata" in sheets:
-            metadata_df = pd.read_excel(xls, "Metadata")
-
-        # اضافه کردن ستون Enhancement Type
-        if chart_df is not None:
-            chart_df["enhancement_type"] = enhancement_type
-        if table_df is not None:
-            table_df["enhancement_type"] = enhancement_type
-        if metadata_df is not None:
-            metadata_df["enhancement_type"] = enhancement_type
+        for df in [chart_df, table_df, metadata_df]:
+            if df is not None:
+                df["enhancement_type"] = enhancement_type
 
         return chart_df, table_df, metadata_df
     except Exception as e:
@@ -68,31 +54,25 @@ def create_unique_key(df, columns):
 # بررسی وجود جدول در / ایجاد آن BQ
 # ===============================
 def ensure_table_exists():
-    """Create the target BigQuery table if it doesn't exist."""
-    from google.cloud.bigquery import SchemaField
-
-    dataset_id = "seo_reports"
-    table_id = "bamtabridsazan__gsc__raw_enhancements"
-    table_ref = client.dataset(dataset_id).table(table_id)
-
+    table_ref = client.dataset(DATASET_ID).table(TABLE_ID)
     try:
         client.get_table(table_ref)
-        print(f"✅ Table {dataset_id}.{table_id} already exists.")
+        print(f"✅ Table {DATASET_ID}.{TABLE_ID} already exists.")
     except Exception:
-        print(f"⚙️ Table {dataset_id}.{table_id} not found. Creating...")
+        print(f"⚙️ Table {DATASET_ID}.{TABLE_ID} not found. Creating...")
         schema = [
-            SchemaField("date", "DATE"),             # ستون تاریخ از Chart sheet
-            SchemaField("url", "STRING"),            # ستون URL از Table sheet
-            SchemaField("item_name", "STRING"),      # ستون Item name از Table sheet
-            SchemaField("last_crawled", "DATE"),    # ستون Last crawled از Table sheet
-            SchemaField("site", "STRING"),           # ثابت یا گرفته شده از نام دامنه
-            SchemaField("appearance_type", "STRING"),# Breadcrumb / FAQ / Recipe و غیره
-            SchemaField("status", "STRING"),         # Valid / Invalid یا مشابه
-            SchemaField("unique_key", "STRING"),     # hash یا ترکیب یکتا
+            SchemaField("date", "DATE"),
+            SchemaField("url", "STRING"),
+            SchemaField("item_name", "STRING"),
+            SchemaField("last_crawled", "DATE"),
+            SchemaField("site", "STRING"),
+            SchemaField("appearance_type", "STRING"),
+            SchemaField("status", "STRING"),
+            SchemaField("unique_key", "STRING"),
         ]
         table = bigquery.Table(table_ref, schema=schema)
         client.create_table(table)
-        print(f"✅ Table {dataset_id}.{table_id} created successfully.")
+        print(f"✅ Table {DATASET_ID}.{TABLE_ID} created successfully.")
 
 # ===============================
 # دریافت کلیدهای موجود از BQ
@@ -106,9 +86,17 @@ def get_existing_unique_keys():
 # آپلود داده جدید به BQ
 # ===============================
 def append_to_bigquery(df):
-    # تبدیل ستون date به نوع DATE مناسب برای BigQuery
-    if 'date' in df.columns:
-        df['date'] = pd.to_datetime(df['date'], errors='coerce').dt.date
+    # تبدیل ستون‌های تاریخ به DATE
+    for date_col in ["date", "last_crawled"]:
+        if date_col in df.columns:
+            df[date_col] = pd.to_datetime(df[date_col], errors="coerce").dt.date
+
+    # مرتب‌سازی و اضافه کردن ستون‌های گمشده مطابق اسکیما
+    schema_cols = ["date", "url", "item_name", "last_crawled", "site", "appearance_type", "status", "unique_key"]
+    for col in schema_cols:
+        if col not in df.columns:
+            df[col] = None
+    df = df[schema_cols]
 
     job_config = bigquery.LoadJobConfig(write_disposition="WRITE_APPEND")
     job = client.load_table_from_dataframe(df, f"{PROJECT_ID}.{DATASET_ID}.{TABLE_ID}", job_config=job_config)
@@ -120,8 +108,7 @@ def append_to_bigquery(df):
 # ===============================
 ensure_table_exists()
 
-# ستون‌های معتبر مطابق جدول BQ
-VALID_COLUMNS = ["site", "appearance_type", "status", "unique_key", "url", "item_name", "last_crawled"]
+VALID_COLUMNS = ["date", "url", "item_name", "last_crawled", "site", "appearance_type", "status", "unique_key"]
 
 def main():
     all_new_records = []
@@ -138,8 +125,7 @@ def main():
                 continue
 
             file_path = os.path.join(folder_path, file_name)
-            enhancement_type = enhancement_folder  # نام فولدر
-
+            enhancement_type = enhancement_folder
             print(f"📄 Processing {file_path}")
 
             chart_df, table_df, metadata_df = parse_excel_file(file_path, enhancement_type)
@@ -148,37 +134,23 @@ def main():
                 if df is None or df.empty:
                     continue
 
-                # نرمال‌سازی نام ستون‌ها
                 df.columns = [c.strip().lower().replace(" ", "_") for c in df.columns]
 
-                # اطمینان از وجود ستون‌های لازم
-                for col in ["url", "item_name", "last_crawled"]:
+                for col in ["url", "item_name", "last_crawled", "date", "site", "appearance_type", "status"]:
                     if col not in df.columns:
                         df[col] = None
 
-                # اضافه کردن ستون enhancement_type
-                if "enhancement_type" not in df.columns:
-                    df["enhancement_type"] = enhancement_type
-
-                # ساخت unique_key
-                df = create_unique_key(df, ["url", "item_name", "last_crawled", "enhancement_type"])
-
-                # فیلتر رکوردهای جدید
+                df = create_unique_key(df, UNIQUE_KEY_COLUMNS)
                 new_df = df[~df["unique_key"].isin(existing_keys)]
                 existing_keys.update(new_df["unique_key"].tolist())
 
                 if not new_df.empty:
-                    # فقط ستون‌های معتبر را نگه دار
                     new_df = new_df[[col for col in VALID_COLUMNS if col in new_df.columns]]
-
-                    # تبدیل ستون‌های تاریخ به DATE
-                    for date_col in ["last_crawled"]:
+                    for date_col in ["date", "last_crawled"]:
                         if date_col in new_df.columns:
                             new_df[date_col] = pd.to_datetime(new_df[date_col], errors="coerce").dt.date
-
                     all_new_records.append(new_df)
 
-    # آپلود نهایی
     if all_new_records:
         final_df = pd.concat(all_new_records, ignore_index=True)
         append_to_bigquery(final_df)
@@ -187,4 +159,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
