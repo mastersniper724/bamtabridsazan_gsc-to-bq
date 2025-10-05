@@ -138,6 +138,7 @@ def upload_to_bq(df):
             bigquery.SchemaField("Impressions", "INTEGER"),
             bigquery.SchemaField("CTR", "FLOAT"),
             bigquery.SchemaField("Position", "FLOAT"),
+            bigquery.SchemaField("SearchType", "STRING"),
             bigquery.SchemaField("unique_key", "STRING"),
         ],
     )
@@ -301,6 +302,7 @@ def fetch_noindex_batch(start_date, end_date, existing_keys):
                         "Impressions": r.get("impressions", 0),
                         "CTR": r.get("ctr", 0.0),
                         "Position": r.get("position", 0.0),
+                        "SearchType": stype,
                     }
                     row["unique_key"] = generate_unique_key(row)
                     if row["unique_key"] not in existing_keys:
@@ -372,6 +374,7 @@ def fetch_sitewide_batch(start_date, end_date, existing_keys):
                 "Impressions": r.get("impressions", 0),
                 "CTR": r.get("ctr", 0.0),
                 "Position": r.get("position", 0.0),
+                "SearchType": stype,
             }
 
             unique_key = generate_unique_key(row)
@@ -407,6 +410,7 @@ def fetch_sitewide_batch(start_date, end_date, existing_keys):
                 "Impressions": None,
                 "CTR": None,
                 "Position": None,
+                "SearchType": stype,
             }
             unique_key = generate_unique_key(placeholder_row)
             if unique_key not in existing_keys:
@@ -478,6 +482,7 @@ def main():
                         "Impressions": r.get("impressions", 0),
                         "CTR": r.get("ctr", 0.0),
                         "Position": r.get("position", 0.0),
+                        "SearchType": stype,
                     }
                     unique_key = generate_unique_key(row)
                     if unique_key not in existing_keys:
