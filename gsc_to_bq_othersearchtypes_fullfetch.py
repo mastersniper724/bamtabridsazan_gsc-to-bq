@@ -280,7 +280,7 @@ def fetch_noindex_batch(start_date, end_date, existing_keys):
                 resp = service.searchanalytics().query(siteUrl=SITE_URL, body=request).execute()
             except Exception as e:
                 print(f"[ERROR] No-Index batch error: {e}, retrying in {RETRY_DELAY} sec...", flush=True)
-            time.sleep(RETRY_DELAY)
+                time.sleep(RETRY_DELAY)
                 continue
     
             rows = resp.get("rows", [])
