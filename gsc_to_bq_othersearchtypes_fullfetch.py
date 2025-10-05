@@ -273,42 +273,45 @@ def fetch_noindex_batch(start_date, end_date, existing_keys):
             "rowLimit": ROW_LIMIT,
             "startRow": start_row,
         }
-        try:
-            resp = service.searchanalytics().query(siteUrl=SITE_URL, body=request).execute()
-        except Exception as e:
-            print(f"[ERROR] No-Index batch error: {e}, retrying in {RETRY_DELAY} sec...", flush=True)
+        # حلقه روی searchType ها
+        for stype in ['image', 'video', 'news']:
+            request['searchType'] = stype
+            try:
+                resp = service.searchanalytics().query(siteUrl=SITE_URL, body=request).execute()
+            except Exception as e:
+                print(f"[ERROR] No-Index batch error: {e}, retrying in {RETRY_DELAY} sec...", flush=True)
             time.sleep(RETRY_DELAY)
-            continue
+                continue
+    
+            rows = resp.get("rows", [])
+            if not rows:
+                break
 
-        rows = resp.get("rows", [])
-        if not rows:
-            break
-
-        fetched_total += len(rows)
-        for r in rows:
-            keys = r.get("keys", [])
-            # Expect keys = [date, page] for this dims
-            if len(keys) == 2:
-                page_val = keys[1]
-                if (page_val is None) or (str(page_val).strip() == ""):
-                    # this is a no-index-like record (page NULL/empty)
-                    row = {
-                        "Date": keys[0],
-                        "Query": "__NO_INDEX__",
-                        "Page": "__NO_INDEX__",
-                        "Country": None,
-                        "Device": None,
-                        "Clicks": r.get("clicks", 0),
-                        "Impressions": r.get("impressions", 0),
-                        "CTR": r.get("ctr", 0.0),
-                        "Position": r.get("position", 0.0),
-                        "SearchType": stype,
-                    }
-                    row["unique_key"] = generate_unique_key(row)
-                    if row["unique_key"] not in existing_keys:
-                        existing_keys.add(row["unique_key"])
-                        noindex_rows.append(row)
-                        new_candidates += 1
+            fetched_total += len(rows)
+            for r in rows:
+                keys = r.get("keys", [])
+                # Expect keys = [date, page] for this dims
+                if len(keys) == 2:
+                    page_val = keys[1]
+                    if (page_val is None) or (str(page_val).strip() == ""):
+                        # this is a no-index-like record (page NULL/empty)
+                        row = {
+                            "Date": keys[0],
+                            "Query": "__NO_INDEX__",
+                            "Page": "__NO_INDEX__",
+                            "Country": None,
+                            "Device": None,
+                            "Clicks": r.get("clicks", 0),
+                            "Impressions": r.get("impressions", 0),
+                            "CTR": r.get("ctr", 0.0),
+                            "Position": r.get("position", 0.0),
+                            "SearchType": stype,
+                        }
+                        row["unique_key"] = generate_unique_key(row)
+                        if row["unique_key"] not in existing_keys:
+                            existing_keys.add(row["unique_key"])
+                            noindex_rows.append(row)
+                            new_candidates += 1
 
         if len(rows) < ROW_LIMIT:
             break
