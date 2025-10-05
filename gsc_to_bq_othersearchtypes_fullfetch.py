@@ -189,7 +189,6 @@ def fetch_gsc_data(start_date, end_date, existing_keys):
 
             # حلقه روی searchType ها
             for stype in ['image', 'video', 'news']:
-                request = request_base.copy()
                 request['searchType'] = stype
                 try:
                     resp = service.searchanalytics().query(siteUrl=SITE_URL, body=request).execute()
