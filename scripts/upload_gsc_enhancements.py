@@ -165,14 +165,33 @@ def parse_excel_file(file_path):
     # =================================================
     if "Chart" in xls.sheet_names:
         try:
+            # شیت Chart را از فایل اکسل بخوان
             df_chart = pd.read_excel(xls, sheet_name="Chart")
-            metric_cols = ["Impressions","Clicks","CTR","Position"]
-            available_cols = [c for c in metric_cols if c in df_chart.columns]
-            if available_cols:
-                df_chart_renamed = df_chart.rename(columns=lambda c: c.lower() if c in available_cols else c)
-                metrics_frames.append(df_chart_renamed)
+            
+            # استانداردسازی نام ستون‌ها (برای جلوگیری از تفاوت حروف بزرگ/کوچک)
+            df_chart.columns = df_chart.columns.str.strip().str.lower()
+
+            # ایجاد ستون‌های مورد نیاز در صورت نبودشان
+            for col in ["page", "appearance_type", "impressions", "clicks", "ctr", "position", "item_name", "issue_name", "last_crawled", "status"]:
+                if col not in df_chart.columns:
+                    df_chart[col] = None
+            
+            # حذف ردیف‌های کاملاً خالی
+            df_chart = df_chart.dropna(how="all")
+
+            # اطمینان از نوع داده‌ای صحیح برای ستون‌های عددی
+            for metric in ["impressions", "clicks", "ctr", "position"]:
+                if metric in df_chart.columns:
+                    df_chart[metric] = pd.to_numeric(df_chart[metric], errors="coerce")
+
+            # ✅ اضافه کردن df_chart به لیست metrics_frames
+            metrics_frames.append(df_chart)
+
+            print(f"[INFO] Chart sheet read successfully from {file_path}, rows: {len(df_chart)}")
+
         except Exception as e:
             print(f"[WARN] Failed to read Chart sheet in {file_path}: {e}")
+            df_chart = pd.DataFrame()
 
     details_df = pd.concat(details_frames, ignore_index=True) if details_frames else pd.DataFrame()
     metrics_df = pd.concat(metrics_frames, ignore_index=True) if metrics_frames else pd.DataFrame()
