@@ -48,14 +48,20 @@ FINAL_COLUMNS = [
 # =================================================
 # BLOCK 2: ARGPARSE (optional debug / path override)
 # =================================================
-parser = argparse.ArgumentParser(description="Upload GSC Enhancements (Details) to BigQuery")
-parser.add_argument("--local-path", type=str, default=os.environ.get("GSC_ENHANCEMENTS_PATH", GITHUB_LOCAL_PATH_DEFAULT),
-                    help="Local folder containing .xlsx enhancement files")
-parser.add_argument("--debug", action="store_true", help="Debug mode: don't upload to BigQuery; write CSV instead")
+parser = argparse.ArgumentParser(description="Upload GSC Enhancements Data to BigQuery")
+parser.add_argument("--start-date", type=str, help="Start date for fetching data (optional)")
+parser.add_argument("--end-date", type=str, help="End date for fetching data (optional)")
+parser.add_argument("--local-path", type=str, help="Path to local folder containing Excel files", default="gsc_enhancements")
+parser.add_argument("--csv-test", type=str, help="Optional CSV test file path", default=None)
+parser.add_argument("--debug", action="store_true", help="Enable debug mode")
+
 args = parser.parse_args()
 
-GITHUB_LOCAL_PATH = args.local_path
-DEBUG_MODE = args.debug
+start_date = args.start_date
+end_date = args.end_date
+enhancement_folder = args.local_path
+csv_test_path = args.csv_test
+debug_mode = args.debug
 
 # =================================================
 # BLOCK 3: CLIENTS & UTIL
