@@ -180,13 +180,28 @@ def parse_excel_file(file_path):
             df_chart = df_chart.dropna(how="all")
 
             # اطمینان از نوع داده‌ای صحیح برای ستون‌های عددی
-            for metric in ["impressions", "clicks", "ctr", "position"]:
-                if metric in df_chart.columns:
-                    df_chart[metric] = pd.to_numeric(df_chart[metric], errors="coerce")
+            for metric_cols in ["impressions", "clicks", "ctr", "position"]:
+                if metric_cols in df_chart.columns:
+                    df_chart[metric_cols] = pd.to_numeric(df_chart[metric_cols], errors="coerce")
+
+            # انتخاب ستون‌هایی که واقعا در فایل وجود دارن
+            available_cols = [c for c in metric_cols if c in df_chart.columns]
+
+            if available_cols:
+                # تبدیل نام فقط ستون‌های متریک به حروف کوچک برای هماهنگی با BQ
+                rename_map = {c: c.lower() for c in available_cols}
+                df_chart_renamed = df_chart.rename(columns=rename_map)
+
+                # اضافه به لیست متریک‌ها
+                metrics_frames.append(df_chart_renamed)
+                print(f"[INFO] Added metrics from {file_path}: {available_cols}")
+            else:
+                print(f"[WARN] No metric columns found in {file_path}. Available: {list(df_chart.columns)}")
+
+
 
             # ✅ اضافه کردن df_chart به لیست metrics_frames
             metrics_frames.append(df_chart)
-            print(f"[INFO] Added metrics from {file_path}: {metrics_frames}")
 
             print(f"[INFO] Chart sheet read successfully from {file_path}, rows: {len(df_chart)}")
 
