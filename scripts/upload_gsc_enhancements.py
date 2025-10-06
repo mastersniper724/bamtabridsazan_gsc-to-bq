@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 # ============================================================
 # File: upload_gsc_enhancements.py
-# Revision: Rev.32 — Fixed item_name and impressions extraction from Excel
+# Revision: Rev.33 — Fix Item name and Impressions extraction from specific sheets
 # Purpose: Parse GSC Enhancement XLSX exports (placed in gsc_enhancements/),
 #          build per-URL raw enhancements table and load to BigQuery with dedupe.
 # ============================================================
@@ -14,6 +14,7 @@ import hashlib
 from datetime import datetime, date
 from uuid import uuid4
 import warnings
+# نادیده گرفتن هشدارهای مربوط به Workbook بدون style پیش‌فرض
 warnings.filterwarnings(
     "ignore",
     category=UserWarning,
@@ -33,6 +34,7 @@ TABLE_ID = "bamtabridsazan__gsc__raw_enhancements"
 MAPPING_TABLE = f"{PROJECT_ID}.{DATASET_ID}.bamtabridsazan__gsc__searchappearance_enhancement_mapping"
 GITHUB_LOCAL_PATH_DEFAULT = "gsc_enhancements"
 
+# Final schema columns (must match table schema if exists)
 FINAL_COLUMNS = [
     "site",
     "date",
@@ -47,13 +49,14 @@ FINAL_COLUMNS = [
     "fetch_date",
     "source_file",
     "unique_key",
+    # Metrics dynamic
     "impressions",
     "clicks",
     "ctr",
     "position"
 ]
 
-DEBUG_MODE = False
+DEBUG_MODE = False  # حالت پیش‌فرض
 
 # =================================================
 # BLOCK 2: ARGPARSE
@@ -133,39 +136,37 @@ def parse_excel_file(file_path):
         xls = pd.ExcelFile(file_path)
     except Exception as e:
         print(f"[WARN] Cannot open {file_path}: {e}")
-        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+        return pd.DataFrame(), pd.DataFrame()
 
     details_frames = []
     metrics_frames = []
 
-    for sheet in xls.sheet_names:
+    # =================================================
+    # BLOCK 5.1: Extract "Table" sheet for Item name (fix for Rev.33)
+    # =================================================
+    if "Table" in xls.sheet_names:
         try:
-            df = pd.read_excel(xls, sheet_name=sheet)
+            df_table = pd.read_excel(xls, sheet_name="Table")
+            if "Item name" in df_table.columns:
+                df_table['item_name'] = df_table['Item name']
+                df_table['url'] = df_table.get('URL') or df_table.get('Page') or df_table.get('page')
+                details_frames.append(df_table)
         except Exception as e:
-            print(f"[WARN] failed read sheet {sheet} in {file_path}: {e}")
-            continue
-        if df is None or df.empty:
-            continue
+            print(f"[WARN] Failed to read Table sheet in {file_path}: {e}")
 
-        df_cols_norm = _normalize_columns(df.columns.tolist())
-        rename_map = {orig: norm for orig, norm in zip(df.columns.tolist(), df_cols_norm)}
-        df = df.rename(columns=rename_map)
-
-        # Detect Table sheet for details
-        if sheet.lower() == "table" and "url" in df.columns:
-            for c in ("url","page","item_name","item","issue","issue_name","last_crawled","status"):
-                if c not in df.columns:
-                    df[c] = None
-            if "item_name" not in df.columns and "item" in df.columns:
-                df["item_name"] = df["item"]
-            details_frames.append(df)
-
-        # Detect Chart sheet for metrics
-        elif sheet.lower() == "chart":
-            metrics_cols = [c for c in df.columns if c.lower() in ("impressions","clicks","ctr","position")]
-            if metrics_cols:
-                metrics_frames.append(df)
-            continue
+    # =================================================
+    # BLOCK 5.2: Extract "Chart" sheet for Metrics (fix for Rev.33)
+    # =================================================
+    if "Chart" in xls.sheet_names:
+        try:
+            df_chart = pd.read_excel(xls, sheet_name="Chart")
+            metric_cols = ["Impressions","Clicks","CTR","Position"]
+            available_cols = [c for c in metric_cols if c in df_chart.columns]
+            if available_cols:
+                df_chart_renamed = df_chart.rename(columns=lambda c: c.lower() if c in available_cols else c)
+                metrics_frames.append(df_chart_renamed)
+        except Exception as e:
+            print(f"[WARN] Failed to read Chart sheet in {file_path}: {e}")
 
     details_df = pd.concat(details_frames, ignore_index=True) if details_frames else pd.DataFrame()
     metrics_df = pd.concat(metrics_frames, ignore_index=True) if metrics_frames else pd.DataFrame()
@@ -197,11 +198,14 @@ def ensure_table_exists():
         print(f"[INFO] Table {DATASET_ID}.{TABLE_ID} exists, skipping creation.")
     except Exception:
         print(f"[INFO] Table {DATASET_ID}.{TABLE_ID} not found, creating...")
+        # ابتدا فقط ستون‌های اصلی
         schema = [bigquery.SchemaField(c, "STRING") for c in FINAL_COLUMNS]
+        # اضافه کردن ستون‌های تاریخ فقط اگر وجود نداشته باشند
         date_columns = ["date", "last_crawled", "fetch_date"]
         for col in date_columns:
             if col not in [f.name for f in schema]:
                 schema.append(bigquery.SchemaField(col, "DATE"))
+
         table = bigquery.Table(table_ref, schema=schema)
         bq_client.create_table(table)
         print(f"[INFO] Table {DATASET_ID}.{TABLE_ID} created.")
@@ -230,23 +234,32 @@ def get_mapping_dict():
 # BLOCK 8: Upload (fixed + pyarrow-safe dates)
 # =================================================
 def upload_to_bq(df):
+    """Schema-safe upload. Operates on the `df` parameter (no use of final_df)."""
     if df is None or df.empty:
         print("[INFO] No new rows to upload.")
         return
 
     table_ref = bq_client.dataset(DATASET_ID).table(TABLE_ID)
+
+    # read target schema if table exists, otherwise fall back to FINAL_COLUMNS
     try:
         table = bq_client.get_table(table_ref)
         allowed_cols = [f.name for f in table.schema]
     except Exception:
         allowed_cols = FINAL_COLUMNS
 
+    # work on a copy
     df = df.copy()
+
+    # ensure all allowed columns exist (avoid missing-col errors)
     for c in allowed_cols:
         if c not in df.columns:
             df[c] = None
+
+    # keep only allowed columns and reorder to match table schema
     df = df[allowed_cols]
 
+    # convert date-like columns to date objects (pyarrow / BigQuery friendly)
     for dcol in ['date', 'last_crawled', 'fetch_date']:
         if dcol not in df.columns:
             df[dcol] = pd.NaT
@@ -256,12 +269,14 @@ def upload_to_bq(df):
         df[dcol] = df[dcol].dt.strftime("%Y-%m-%d")
     df = df.where(pd.notnull(df), None)
 
+    # optional debug preview (local CSV)
     if DEBUG_MODE:
         out_fn = f"gsc_enhancements_upload_preview_{FETCH_ID}.csv"
         df.to_csv(out_fn, index=False)
         print(f"[DEBUG] Wrote preview CSV: {out_fn} (rows: {len(df)})")
         return
 
+    # upload to BQ
     try:
         job_config = bigquery.LoadJobConfig(write_disposition="WRITE_APPEND")
         job = bq_client.load_table_from_dataframe(df, f"{PROJECT_ID}.{DATASET_ID}.{TABLE_ID}", job_config=job_config)
@@ -269,6 +284,7 @@ def upload_to_bq(df):
         print(f"[INFO] Inserted {len(df)} rows to {PROJECT_ID}.{DATASET_ID}.{TABLE_ID}.")
     except Exception as e:
         print(f"[ERROR] Failed to insert rows: {e}")
+
 
 # =================================================
 # BLOCK 9: MAIN
@@ -301,6 +317,7 @@ def main():
             print(f"[INFO] No data found in {fname} — skipping.")
             continue
 
+        # normalize columns
         details_df['url'] = details_df.get('url').fillna(details_df.get('page')) if not details_df.empty else None
         details_df = details_df[details_df['url'].notna()] if not details_df.empty else pd.DataFrame()
 
@@ -308,46 +325,28 @@ def main():
         details_df['date'] = date_val
         details_df['enhancement_name'] = enhancement_name
         details_df['status'] = details_df.get('status').fillna(status_hint) if 'status' in details_df.columns else status_hint
-        details_df['status'] = details_df['status'].apply(lambda v: str(v).strip() if v else None)
-
-        # NEW: item_name extraction from Table sheet
-        if 'item_name' in details_df.columns:
-            details_df['item_name'] = details_df['item_name']
-
-        details_df['issue_name'] = details_df.get('issue')
         details_df['fetch_id'] = FETCH_ID
         details_df['fetch_date'] = FETCH_DATE
         details_df['source_file'] = source_file
-        enh_norm = enhancement_name.strip().lower() if enhancement_name else ""
-        details_df['appearance_type'] = mapping_dict.get(enh_norm)
+        details_df['last_crawled'] = details_df.get('last_crawled')  # Optional: keep if exists
 
-        details_df['unique_key'] = build_unique_key_series(details_df, site, enhancement_name, date_val, status_col='status')
-        new_df = details_df[~details_df['unique_key'].isin(existing_keys)].copy()
-        existing_keys.update(new_df['unique_key'].tolist())
-        for c in FINAL_COLUMNS:
-            if c not in new_df.columns:
-                new_df[c] = None
-        new_df = new_df[FINAL_COLUMNS]
+        # =================================================
+        # BLOCK 9.1: Merge metrics (Rev.33 fix)
+        # =================================================
+        if not metrics_df.empty and not details_df.empty:
+            for mcol in ['impressions','clicks','ctr','position']:
+                mcol_excel = mcol.capitalize() if mcol != 'ctr' else 'CTR'
+                if mcol_excel in metrics_df.columns:
+                    details_df[mcol] = metrics_df[mcol_excel]
+                else:
+                    details_df[mcol] = None
 
-        # NEW: inject metrics_df values dynamically (Impressions, Clicks, CTR, Position)
-        if not metrics_df.empty:
-            for metric_col in ["impressions","clicks","ctr","position"]:
-                metric_excel_col = metric_col.capitalize() if metric_col=="impressions" else metric_col
-                if metric_excel_col in metrics_df.columns:
-                    new_df[metric_col] = metrics_df[metric_excel_col].iloc[0]
+        # unique key
+        details_df['unique_key'] = build_unique_key_series(details_df, site, enhancement_name, date_val)
+        all_new.append(details_df)
 
-        all_new.append(new_df)
-
-    if not all_new:
-        print("[INFO] No new rows across all files.")
-        return
-
-    final_df = pd.concat(all_new, ignore_index=True)
+    final_df = pd.concat(all_new, ignore_index=True) if all_new else pd.DataFrame()
     upload_to_bq(final_df)
-    print("[INFO] Finished processing GSC enhancements.")
 
-# =================================================
-# BLOCK 10: ENTRYPOINT
-# =================================================
 if __name__ == "__main__":
     main()
