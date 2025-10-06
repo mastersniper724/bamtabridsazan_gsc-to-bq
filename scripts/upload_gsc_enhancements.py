@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 # ============================================================
 # File: upload_gsc_enhancements.py
-# Revision: Rev.24 — Fix URL Series issue, dynamic metric injection, preserve all v21 features
+# Revision: Rev.25 — Fix URL Series issue, dynamic metric injection, preserve all v21 features
 # Purpose: Parse GSC Enhancement XLSX exports (placed in gsc_enhancements/),
 #          build per-URL raw enhancements table and load to BigQuery with dedupe.
 # ============================================================
@@ -208,13 +208,14 @@ def ensure_table_exists():
         print(f"[INFO] Table {DATASET_ID}.{TABLE_ID} exists, skipping creation.")
     except Exception:
         print(f"[INFO] Table {DATASET_ID}.{TABLE_ID} not found, creating...")
+        # ابتدا فقط ستون‌های اصلی
         schema = [bigquery.SchemaField(c, "STRING") for c in FINAL_COLUMNS]
-        # date columns
-        schema += [
-            bigquery.SchemaField("date", "DATE"),
-            bigquery.SchemaField("last_crawled", "DATE"),
-            bigquery.SchemaField("fetch_date", "DATE")
-        ]
+        # اضافه کردن ستون‌های تاریخ فقط اگر وجود نداشته باشند
+        date_columns = ["date", "last_crawled", "fetch_date"]
+        for col in date_columns:
+            if col not in [f.name for f in schema]:
+                schema.append(bigquery.SchemaField(col, "DATE"))
+
         table = bigquery.Table(table_ref, schema=schema)
         bq_client.create_table(table)
         print(f"[INFO] Table {DATASET_ID}.{TABLE_ID} created.")
