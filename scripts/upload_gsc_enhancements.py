@@ -324,7 +324,16 @@ def main():
             continue
 
         # normalize columns
-        details_df['url'] = details_df.get('url').fillna(details_df.get('page')) if not details_df.empty else None
+        if not details_df.empty:
+            if 'url' not in details_df.columns or details_df['url'].isna().all():
+                for col in ['URL', 'Page', 'page']:
+                    if col in details_df.columns:
+                        details_df['url'] = details_df[col]
+                        break
+                else:
+                    details_df['url'] = None
+        else:
+            details_df['url'] = None
         details_df = details_df[details_df['url'].notna()] if not details_df.empty else pd.DataFrame()
 
         details_df['site'] = site
