@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 # ============================================================
 # File: upload_gsc_enhancements.py
-# Revision: Rev.22 — Fix URL Series issue, dynamic metric injection, preserve all v21 features
+# Revision: Rev.23 — Fix URL Series issue, dynamic metric injection, preserve all v21 features
 # Purpose: Parse GSC Enhancement XLSX exports (placed in gsc_enhancements/),
 #          build per-URL raw enhancements table and load to BigQuery with dedupe.
 # ============================================================
@@ -14,6 +14,7 @@ import hashlib
 from datetime import datetime, date
 from uuid import uuid4
 import warnings
+warnings.filterwarnings("ignore", category=UserWarning, module="openpyxl")
 
 import pandas as pd
 from google.cloud import bigquery
