@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 # ============================================================
 # File: upload_gsc_enhancements.py
-# Revision: Rev.23 — Fix URL Series issue, dynamic metric injection, preserve all v21 features
+# Revision: Rev.24 — Fix URL Series issue, dynamic metric injection, preserve all v21 features
 # Purpose: Parse GSC Enhancement XLSX exports (placed in gsc_enhancements/),
 #          build per-URL raw enhancements table and load to BigQuery with dedupe.
 # ============================================================
@@ -14,7 +14,12 @@ import hashlib
 from datetime import datetime, date
 from uuid import uuid4
 import warnings
-warnings.filterwarnings("ignore", category=UserWarning, module="openpyxl")
+# نادیده گرفتن هشدارهای مربوط به Workbook بدون style پیش‌فرض
+warnings.filterwarnings(
+    "ignore",
+    category=UserWarning,
+    module="openpyxl.styles.stylesheet"
+)
 
 import pandas as pd
 from google.cloud import bigquery
@@ -199,13 +204,17 @@ def build_unique_key_series(df, site, enhancement_name, date_val, status_col='st
 def ensure_table_exists():
     table_ref = bq_client.dataset(DATASET_ID).table(TABLE_ID)
     try:
-        bq_client.get_table(table_ref)
-        print(f"[INFO] Table {DATASET_ID}.{TABLE_ID} exists.")
+        table = bq_client.get_table(table_ref)
+        print(f"[INFO] Table {DATASET_ID}.{TABLE_ID} exists, skipping creation.")
     except Exception:
-        print(f"[INFO] Table {DATASET_ID}.{TABLE_ID} not found. Creating...")
-        schema = [SchemaField(c,"STRING") for c in FINAL_COLUMNS]
+        print(f"[INFO] Table {DATASET_ID}.{TABLE_ID} not found, creating...")
+        schema = [bigquery.SchemaField(c, "STRING") for c in FINAL_COLUMNS]
         # date columns
-        schema += [SchemaField("date","DATE"), SchemaField("last_crawled","DATE"), SchemaField("fetch_date","DATE")]
+        schema += [
+            bigquery.SchemaField("date", "DATE"),
+            bigquery.SchemaField("last_crawled", "DATE"),
+            bigquery.SchemaField("fetch_date", "DATE")
+        ]
         table = bigquery.Table(table_ref, schema=schema)
         bq_client.create_table(table)
         print(f"[INFO] Table {DATASET_ID}.{TABLE_ID} created.")
