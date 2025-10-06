@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 # ============================================================
 # File: upload_gsc_enhancements.py
-# Revision: Rev.29 — Fix URL Series issue, dynamic metric injection, preserve all v21 features
+# Revision: Rev.30 — Fix URL/Item/Impressions extraction from Summary/Details XLSX
 # Purpose: Parse GSC Enhancement XLSX exports (placed in gsc_enhancements/),
 #          build per-URL raw enhancements table and load to BigQuery with dedupe.
 # ============================================================
@@ -132,6 +132,11 @@ def _normalize_columns(cols):
     return normalized
 
 def parse_excel_file(file_path):
+    """
+    Returns:
+    - details_df: contains URL/page and item_name from Summary 'Table' sheet (Valid files)
+    - metrics_df: contains impressions/clicks/ctr/position from Details 'Chart' sheet (Details files)
+    """
     try:
         xls = pd.ExcelFile(file_path)
     except Exception as e:
@@ -153,29 +158,18 @@ def parse_excel_file(file_path):
         rename_map = {orig: norm for orig, norm in zip(df.columns.tolist(), df_cols_norm)}
         df = df.rename(columns=rename_map)
 
-        # Details-like detection
-        url_cols = [c for c in df.columns if c in ("url","page","link","page_url")]
-        if url_cols:
-            for c in ("url","page","item_name","item","issue","issue_name","last_crawled","status"):
-                if c not in df.columns:
-                    df[c] = None
-            if 'url' not in df.columns and 'page' in df.columns:
-                df['url'] = df['page']
-            if 'url' in df.columns:
-                df['url'] = df['url'].fillna(df.get('page'))
-            if "item" in df.columns and "item_name" not in df.columns:
-                df["item_name"] = df["item"]
-            if "issue" not in df.columns and "issue_name" in df.columns:
-                df["issue"] = df["issue_name"]
-            last_candidates = [c for c in df.columns if "last" in c and "crawl" in c]
-            if last_candidates and "last_crawled" not in df.columns:
-                df["last_crawled"] = df[last_candidates[0]]
-            details_frames.append(df)
-        else:
-            # Chart/metric detection
-            metrics_cols = [c for c in df.columns if c in ("impressions","clicks","ctr","position")]
-            if metrics_cols:
-                metrics_frames.append(df)
+        # Extract URL/page and item_name from Summary files with sheet 'Table'
+        if "valid" in file_path.lower() and sheet.lower() == "table":
+            if "url" in df.columns and "item_name" in df.columns:
+                df['url'] = df['url'].fillna(df.get('url'))
+                df['item_name'] = df['item_name'].fillna(df.get('item_name'))
+                details_frames.append(df)
+            continue
+
+        # Extract metrics (impressions) from Details files with sheet 'Chart'
+        metrics_cols = [c for c in df.columns if c in ("impressions","clicks","ctr","position")]
+        if metrics_cols and sheet.lower() == "chart":
+            metrics_frames.append(df)
             continue
 
     details_df = pd.concat(details_frames, ignore_index=True) if details_frames else pd.DataFrame()
@@ -241,7 +235,7 @@ def get_mapping_dict():
         return {}
 
 # =================================================
-# BLOCK 8: Upload (fixed + pyarrow-safe dates)
+# BLOCK 8: Upload (pyarrow-safe, unchanged)
 # =================================================
 def upload_to_bq(df):
     """Schema-safe upload. Operates on the `df` parameter (no use of final_df)."""
@@ -294,7 +288,6 @@ def upload_to_bq(df):
         print(f"[INFO] Inserted {len(df)} rows to {PROJECT_ID}.{DATASET_ID}.{TABLE_ID}.")
     except Exception as e:
         print(f"[ERROR] Failed to insert rows: {e}")
-
 
 # =================================================
 # BLOCK 9: MAIN
@@ -352,11 +345,11 @@ def main():
                 new_df[c] = None
         new_df = new_df[FINAL_COLUMNS]
 
-        # inject metrics_df values dynamically
+        # inject metrics_df values dynamically from 'Chart' sheet
         if not metrics_df.empty:
             for metric_col in ["impressions","clicks","ctr","position"]:
                 if metric_col in metrics_df.columns:
-                    new_df[metric_col] = metrics_df[metric_col].iloc[0]  # assign first row from Chart
+                    new_df[metric_col] = metrics_df[metric_col].iloc[0]
 
         all_new.append(new_df)
 
