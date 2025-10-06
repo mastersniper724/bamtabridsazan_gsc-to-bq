@@ -163,7 +163,14 @@ def parse_excel_file(file_path):
 # =================================================
 # BLOCK 5.2: Extract "Chart" sheet for Metrics (fix for Rev.34)
 # =================================================
+metrics_frames = []
+details_frames = []
+for fname in sorted(os.listdir(enhancement_folder)):
+    if not fname.lower().endswith(".xlsx"):
+        continue
+    file_path = os.path.join(enhancement_folder, fname)
 xls = pd.ExcelFile(file_path)
+file_path = os.path.join(enhancement_folder, fname)
 if "Chart" in xls.sheet_names:
     try:
         # --------------------------
