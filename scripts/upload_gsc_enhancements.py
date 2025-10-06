@@ -2,9 +2,8 @@
 # -*- coding: utf-8 -*-
 # ============================================================
 # File: upload_gsc_enhancements.py
-# Revision: Rev.30 — Fix URL/Item/Impressions extraction from Summary/Details XLSX
-# Purpose: Parse GSC Enhancement XLSX exports (placed in gsc_enhancements/),
-#          build per-URL raw enhancements table and load to BigQuery with dedupe.
+# Revision: Rev.31 — Fix page/item_name from Summary (Table) and metrics from Details (Chart)
+# Purpose: Parse GSC Enhancement XLSX exports, build per-URL raw enhancements table, load to BigQuery.
 # ============================================================
 
 import os
@@ -14,7 +13,6 @@ import hashlib
 from datetime import datetime, date
 from uuid import uuid4
 import warnings
-# نادیده گرفتن هشدارهای مربوط به Workbook بدون style پیش‌فرض
 warnings.filterwarnings(
     "ignore",
     category=UserWarning,
@@ -34,7 +32,6 @@ TABLE_ID = "bamtabridsazan__gsc__raw_enhancements"
 MAPPING_TABLE = f"{PROJECT_ID}.{DATASET_ID}.bamtabridsazan__gsc__searchappearance_enhancement_mapping"
 GITHUB_LOCAL_PATH_DEFAULT = "gsc_enhancements"
 
-# Final schema columns (must match table schema if exists)
 FINAL_COLUMNS = [
     "site",
     "date",
@@ -49,14 +46,13 @@ FINAL_COLUMNS = [
     "fetch_date",
     "source_file",
     "unique_key",
-    # Metrics dynamic
     "impressions",
     "clicks",
     "ctr",
     "position"
 ]
 
-DEBUG_MODE = False  # حالت پیش‌فرض
+DEBUG_MODE = False
 
 # =================================================
 # BLOCK 2: ARGPARSE
@@ -119,7 +115,7 @@ def parse_filename_metadata(filename):
     return {"site_raw": site_raw, "site": site, "enhancement_name": enhancement_name, "date": dt, "status_hint": status_hint, "source_file": base}
 
 # =================================================
-# BLOCK 5: EXCEL PARSE (Details + Chart)
+# BLOCK 5: EXCEL PARSE (Details + Chart + Summary Table)
 # =================================================
 def _normalize_columns(cols):
     normalized = []
@@ -132,11 +128,9 @@ def _normalize_columns(cols):
     return normalized
 
 def parse_excel_file(file_path):
-    """
-    Returns:
-    - details_df: contains URL/page and item_name from Summary 'Table' sheet (Valid files)
-    - metrics_df: contains impressions/clicks/ctr/position from Details 'Chart' sheet (Details files)
-    """
+    """Parse Excel, return (details_df, metrics_df).  
+    - details_df includes per-URL data (page/item_name/etc.)  
+    - metrics_df includes impressions/clicks/ctr/position"""
     try:
         xls = pd.ExcelFile(file_path)
     except Exception as e:
@@ -146,6 +140,7 @@ def parse_excel_file(file_path):
     details_frames = []
     metrics_frames = []
 
+    is_summary_file = "valid" in os.path.basename(file_path).lower()  # Summary files with Table sheet
     for sheet in xls.sheet_names:
         try:
             df = pd.read_excel(xls, sheet_name=sheet)
@@ -158,19 +153,46 @@ def parse_excel_file(file_path):
         rename_map = {orig: norm for orig, norm in zip(df.columns.tolist(), df_cols_norm)}
         df = df.rename(columns=rename_map)
 
-        # Extract URL/page and item_name from Summary files with sheet 'Table'
-        if "valid" in file_path.lower() and sheet.lower() == "table":
-            if "url" in df.columns and "item_name" in df.columns:
-                df['url'] = df['url'].fillna(df.get('url'))
-                df['item_name'] = df['item_name'].fillna(df.get('item_name'))
-                details_frames.append(df)
-            continue
+        if is_summary_file and sheet.lower() == "table":
+            # Summary file -> Table sheet -> page/item_name
+            # Map "URL" -> page, "Item name" -> item_name
+            if "url" in df.columns:
+                df["page"] = df["url"]
+            elif "url" not in df.columns and "page" in df.columns:
+                df["page"] = df["page"]
+            if "item_name" not in df.columns and "item_name" in df.columns:
+                df["item_name"] = df["item_name"]
+            details_frames.append(df)
 
-        # Extract metrics (impressions) from Details files with sheet 'Chart'
-        metrics_cols = [c for c in df.columns if c in ("impressions","clicks","ctr","position")]
-        if metrics_cols and sheet.lower() == "chart":
+        elif not is_summary_file and sheet.lower() == "chart":
+            # Details file -> Chart sheet -> metrics
             metrics_frames.append(df)
-            continue
+
+        else:
+            # fallback for Details-like detection (existing logic)
+            url_cols = [c for c in df.columns if c in ("url","page","link","page_url")]
+            if url_cols:
+                for c in ("url","page","item_name","item","issue","issue_name","last_crawled","status"):
+                    if c not in df.columns:
+                        df[c] = None
+                if 'url' not in df.columns and 'page' in df.columns:
+                    df['url'] = df['page']
+                if 'url' in df.columns:
+                    df['url'] = df['url'].fillna(df.get('page'))
+                if "item" in df.columns and "item_name" not in df.columns:
+                    df["item_name"] = df["item"]
+                if "issue" not in df.columns and "issue_name" in df.columns:
+                    df["issue"] = df["issue_name"]
+                last_candidates = [c for c in df.columns if "last" in c and "crawl" in c]
+                if last_candidates and "last_crawled" not in df.columns:
+                    df["last_crawled"] = df[last_candidates[0]]
+                details_frames.append(df)
+            else:
+                # fallback for metrics
+                metrics_cols = [c for c in df.columns if c in ("impressions","clicks","ctr","position")]
+                if metrics_cols:
+                    metrics_frames.append(df)
+                continue
 
     details_df = pd.concat(details_frames, ignore_index=True) if details_frames else pd.DataFrame()
     metrics_df = pd.concat(metrics_frames, ignore_index=True) if metrics_frames else pd.DataFrame()
@@ -202,14 +224,11 @@ def ensure_table_exists():
         print(f"[INFO] Table {DATASET_ID}.{TABLE_ID} exists, skipping creation.")
     except Exception:
         print(f"[INFO] Table {DATASET_ID}.{TABLE_ID} not found, creating...")
-        # ابتدا فقط ستون‌های اصلی
         schema = [bigquery.SchemaField(c, "STRING") for c in FINAL_COLUMNS]
-        # اضافه کردن ستون‌های تاریخ فقط اگر وجود نداشته باشند
         date_columns = ["date", "last_crawled", "fetch_date"]
         for col in date_columns:
             if col not in [f.name for f in schema]:
                 schema.append(bigquery.SchemaField(col, "DATE"))
-
         table = bigquery.Table(table_ref, schema=schema)
         bq_client.create_table(table)
         print(f"[INFO] Table {DATASET_ID}.{TABLE_ID} created.")
@@ -235,7 +254,7 @@ def get_mapping_dict():
         return {}
 
 # =================================================
-# BLOCK 8: Upload (pyarrow-safe, unchanged)
+# BLOCK 8: Upload (fixed + pyarrow-safe dates)
 # =================================================
 def upload_to_bq(df):
     """Schema-safe upload. Operates on the `df` parameter (no use of final_df)."""
@@ -245,25 +264,18 @@ def upload_to_bq(df):
 
     table_ref = bq_client.dataset(DATASET_ID).table(TABLE_ID)
 
-    # read target schema if table exists, otherwise fall back to FINAL_COLUMNS
     try:
         table = bq_client.get_table(table_ref)
         allowed_cols = [f.name for f in table.schema]
     except Exception:
         allowed_cols = FINAL_COLUMNS
 
-    # work on a copy
     df = df.copy()
-
-    # ensure all allowed columns exist (avoid missing-col errors)
     for c in allowed_cols:
         if c not in df.columns:
             df[c] = None
-
-    # keep only allowed columns and reorder to match table schema
     df = df[allowed_cols]
 
-    # convert date-like columns to date objects (pyarrow / BigQuery friendly)
     for dcol in ['date', 'last_crawled', 'fetch_date']:
         if dcol not in df.columns:
             df[dcol] = pd.NaT
@@ -273,14 +285,12 @@ def upload_to_bq(df):
         df[dcol] = df[dcol].dt.strftime("%Y-%m-%d")
     df = df.where(pd.notnull(df), None)
 
-    # optional debug preview (local CSV)
     if DEBUG_MODE:
         out_fn = f"gsc_enhancements_upload_preview_{FETCH_ID}.csv"
         df.to_csv(out_fn, index=False)
         print(f"[DEBUG] Wrote preview CSV: {out_fn} (rows: {len(df)})")
         return
 
-    # upload to BQ
     try:
         job_config = bigquery.LoadJobConfig(write_disposition="WRITE_APPEND")
         job = bq_client.load_table_from_dataframe(df, f"{PROJECT_ID}.{DATASET_ID}.{TABLE_ID}", job_config=job_config)
@@ -320,17 +330,24 @@ def main():
             print(f"[INFO] No data found in {fname} — skipping.")
             continue
 
-        # normalize columns
-        details_df['url'] = details_df.get('url').fillna(details_df.get('page')) if not details_df.empty else None
-        details_df = details_df[details_df['url'].notna()] if not details_df.empty else pd.DataFrame()
+        # map page/item_name from Summary Table if present
+        if details_df.empty and "valid" in fname.lower():
+            xls = pd.ExcelFile(file_path)
+            if "Table" in xls.sheet_names:
+                df_table = pd.read_excel(xls, sheet_name="Table")
+                df_table_cols = [c.strip().lower().replace(" ", "_") for c in df_table.columns]
+                df_table.columns = df_table_cols
+                if "url" in df_table.columns:
+                    df_table["page"] = df_table["url"]
+                if "item_name" in df_table.columns:
+                    df_table["item_name"] = df_table["item_name"]
+                details_df = df_table
 
         details_df['site'] = site
         details_df['date'] = date_val
         details_df['enhancement_name'] = enhancement_name
         details_df['status'] = details_df.get('status').fillna(status_hint) if 'status' in details_df.columns else status_hint
         details_df['status'] = details_df['status'].apply(lambda v: str(v).strip() if v else None)
-        details_df['item_name'] = details_df.get('item_name')
-        details_df['issue_name'] = details_df.get('issue')
         details_df['fetch_id'] = FETCH_ID
         details_df['fetch_date'] = FETCH_DATE
         details_df['source_file'] = source_file
@@ -345,7 +362,7 @@ def main():
                 new_df[c] = None
         new_df = new_df[FINAL_COLUMNS]
 
-        # inject metrics_df values dynamically from 'Chart' sheet
+        # inject metrics_df values dynamically from Chart sheet (Details files)
         if not metrics_df.empty:
             for metric_col in ["impressions","clicks","ctr","position"]:
                 if metric_col in metrics_df.columns:
