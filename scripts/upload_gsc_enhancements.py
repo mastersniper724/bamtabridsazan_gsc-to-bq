@@ -200,9 +200,7 @@ if "Chart" in xls.sheet_names:
         if available_cols:
             # فقط ستون‌های متریک را با حروف کوچک هماهنگ می‌کنیم
             rename_map = {c: c.lower() for c in available_cols}
-            df_chart_renamed = df_chart.rename(columns=rename_map)
-            
-            metrics_frames.append(df_chart_renamed)
+            df_chart_renamed = df_chart.rename(columns=rename_map)            
             print(f"[INFO] Added metrics from {file_path}: {available_cols}")
         else:
             print(f"[WARN] No metric columns found in {file_path}. Available: {list(df_chart.columns)}")
