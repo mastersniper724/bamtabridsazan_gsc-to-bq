@@ -161,67 +161,73 @@ def parse_excel_file(file_path):
             print(f"[WARN] Failed to read Table sheet in {file_path}: {e}")
 
 # =================================================
-# BLOCK 5.2: Extract "Chart" sheet for Metrics (fix for Rev.34)
+# BLOCK 5.2: Extract "Chart" sheet for Metrics (Rev.35)
 # =================================================
-metrics_frames = []
-details_frames = []
-for fname in sorted(os.listdir(enhancement_folder)):
-    if not fname.lower().endswith(".xlsx"):
-        continue
-    file_path = os.path.join(enhancement_folder, fname)
-xls = pd.ExcelFile(file_path)
-file_path = os.path.join(enhancement_folder, fname)
-if "Chart" in xls.sheet_names:
+def extract_chart_metrics(file_path):
+    """
+    Reads the 'Chart' sheet from a given Excel file and returns a DataFrame
+    containing metric columns (impressions, clicks, ctr, position) and other relevant columns.
+    """
+    metrics_frames = []
+
     try:
-        # --------------------------
-        # خواندن شیت Chart
-        # --------------------------
-        df_chart = pd.read_excel(xls, sheet_name="Chart")
-        df_chart.columns = df_chart.columns.str.strip().str.lower()  # استانداردسازی نام ستون‌ها
-
-        # --------------------------
-        # اضافه کردن ستون‌های ضروری در صورت نبودشان
-        # --------------------------
-        required_cols = ["page", "appearance_type", "impressions", "clicks", "ctr",
-                         "position", "item_name", "issue_name", "last_crawled", "status"]
-        for col in required_cols:
-            if col not in df_chart.columns:
-                df_chart[col] = None
-
-        # --------------------------
-        # حذف ردیف‌های کاملاً خالی
-        # --------------------------
-        df_chart = df_chart.dropna(how="all")
-
-        # --------------------------
-        # تعریف ستون‌های متریک و تبدیل نوع داده‌ای آنها
-        # --------------------------
-        metric_cols = ["impressions", "clicks", "ctr", "position"]
-        for col in metric_cols:
-            if col in df_chart.columns:
-                df_chart[col] = pd.to_numeric(df_chart[col], errors="coerce")
-
-        # --------------------------
-        # بررسی ستون‌های متریک موجود
-        # --------------------------
-        available_cols = [c for c in metric_cols if c in df_chart.columns]
-        if available_cols:
-            # فقط ستون‌های متریک را با حروف کوچک هماهنگ می‌کنیم
-            rename_map = {c: c.lower() for c in available_cols}
-            df_chart_renamed = df_chart.rename(columns=rename_map)            
-            print(f"[INFO] Added metrics from {file_path}: {available_cols}")
-        else:
-            print(f"[WARN] No metric columns found in {file_path}. Available: {list(df_chart.columns)}")
-
-        # --------------------------
-        # اضافه کردن کل df_chart به لیست metrics_frames (برای بررسی کامل)
-        # --------------------------
-        metrics_frames.append(df_chart)
-        print(f"[INFO] Chart sheet read successfully from {file_path}, rows: {len(df_chart)}")
-
+        xls = pd.ExcelFile(file_path)
     except Exception as e:
-        print(f"[WARN] Failed to read Chart sheet in {file_path}: {e}")
-        df_chart = pd.DataFrame()
+        print(f"[WARN] Cannot open {file_path}: {e}")
+        return pd.DataFrame()
+
+    if "Chart" in xls.sheet_names:
+        try:
+            # --------------------------
+            # خواندن شیت Chart
+            # --------------------------
+            df_chart = pd.read_excel(xls, sheet_name="Chart")
+            df_chart.columns = df_chart.columns.str.strip().str.lower()  # استانداردسازی نام ستون‌ها
+
+            # --------------------------
+            # اضافه کردن ستون‌های ضروری در صورت نبودشان
+            # --------------------------
+            required_cols = [
+                "page", "appearance_type", "impressions", "clicks", "ctr",
+                "position", "item_name", "issue_name", "last_crawled", "status"
+            ]
+            for col in required_cols:
+                if col not in df_chart.columns:
+                    df_chart[col] = None
+
+            # --------------------------
+            # حذف ردیف‌های کاملاً خالی
+            # --------------------------
+            df_chart = df_chart.dropna(how="all")
+
+            # --------------------------
+            # تبدیل نوع داده‌ای ستون‌های متریک
+            # --------------------------
+            metric_cols = ["impressions", "clicks", "ctr", "position"]
+            for col in metric_cols:
+                if col in df_chart.columns:
+                    df_chart[col] = pd.to_numeric(df_chart[col], errors="coerce")
+
+            # --------------------------
+            # بررسی ستون‌های متریک موجود
+            # --------------------------
+            available_cols = [c for c in metric_cols if c in df_chart.columns]
+            if available_cols:
+                rename_map = {c: c.lower() for c in available_cols}
+                df_chart = df_chart.rename(columns=rename_map)
+                print(f"[INFO] Added metrics from {file_path}: {available_cols}")
+            else:
+                print(f"[WARN] No metric columns found in {file_path}. Available: {list(df_chart.columns)}")
+
+            print(f"[INFO] Chart sheet read successfully from {file_path}, rows: {len(df_chart)}")
+            metrics_frames.append(df_chart)
+
+        except Exception as e:
+            print(f"[WARN] Failed to read Chart sheet in {file_path}: {e}")
+            df_chart = pd.DataFrame()
+
+    return pd.concat(metrics_frames, ignore_index=True) if metrics_frames else pd.DataFrame()
+
 
 # =================================================
 # BLOCK 6: Unique key
