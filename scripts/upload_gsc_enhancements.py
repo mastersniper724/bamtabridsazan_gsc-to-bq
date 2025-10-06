@@ -2,8 +2,9 @@
 # -*- coding: utf-8 -*-
 # ============================================================
 # File: upload_gsc_enhancements.py
-# Revision: Rev.31 — Fix page/item_name from Summary (Table) and metrics from Details (Chart)
-# Purpose: Parse GSC Enhancement XLSX exports, build per-URL raw enhancements table, load to BigQuery.
+# Revision: Rev.32 — Fixed item_name and impressions extraction from Excel
+# Purpose: Parse GSC Enhancement XLSX exports (placed in gsc_enhancements/),
+#          build per-URL raw enhancements table and load to BigQuery with dedupe.
 # ============================================================
 
 import os
@@ -115,7 +116,7 @@ def parse_filename_metadata(filename):
     return {"site_raw": site_raw, "site": site, "enhancement_name": enhancement_name, "date": dt, "status_hint": status_hint, "source_file": base}
 
 # =================================================
-# BLOCK 5: EXCEL PARSE (Details + Chart + Summary Table)
+# BLOCK 5: EXCEL PARSE (Details + Chart)
 # =================================================
 def _normalize_columns(cols):
     normalized = []
@@ -128,19 +129,15 @@ def _normalize_columns(cols):
     return normalized
 
 def parse_excel_file(file_path):
-    """Parse Excel, return (details_df, metrics_df).  
-    - details_df includes per-URL data (page/item_name/etc.)  
-    - metrics_df includes impressions/clicks/ctr/position"""
     try:
         xls = pd.ExcelFile(file_path)
     except Exception as e:
         print(f"[WARN] Cannot open {file_path}: {e}")
-        return pd.DataFrame(), pd.DataFrame()
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
     details_frames = []
     metrics_frames = []
 
-    is_summary_file = "valid" in os.path.basename(file_path).lower()  # Summary files with Table sheet
     for sheet in xls.sheet_names:
         try:
             df = pd.read_excel(xls, sheet_name=sheet)
@@ -149,50 +146,26 @@ def parse_excel_file(file_path):
             continue
         if df is None or df.empty:
             continue
+
         df_cols_norm = _normalize_columns(df.columns.tolist())
         rename_map = {orig: norm for orig, norm in zip(df.columns.tolist(), df_cols_norm)}
         df = df.rename(columns=rename_map)
 
-        if is_summary_file and sheet.lower() == "table":
-            # Summary file -> Table sheet -> page/item_name
-            # Map "URL" -> page, "Item name" -> item_name
-            if "url" in df.columns:
-                df["page"] = df["url"]
-            elif "url" not in df.columns and "page" in df.columns:
-                df["page"] = df["page"]
-            if "item_name" not in df.columns and "item_name" in df.columns:
-                df["item_name"] = df["item_name"]
+        # Detect Table sheet for details
+        if sheet.lower() == "table" and "url" in df.columns:
+            for c in ("url","page","item_name","item","issue","issue_name","last_crawled","status"):
+                if c not in df.columns:
+                    df[c] = None
+            if "item_name" not in df.columns and "item" in df.columns:
+                df["item_name"] = df["item"]
             details_frames.append(df)
 
-        elif not is_summary_file and sheet.lower() == "chart":
-            # Details file -> Chart sheet -> metrics
-            metrics_frames.append(df)
-
-        else:
-            # fallback for Details-like detection (existing logic)
-            url_cols = [c for c in df.columns if c in ("url","page","link","page_url")]
-            if url_cols:
-                for c in ("url","page","item_name","item","issue","issue_name","last_crawled","status"):
-                    if c not in df.columns:
-                        df[c] = None
-                if 'url' not in df.columns and 'page' in df.columns:
-                    df['url'] = df['page']
-                if 'url' in df.columns:
-                    df['url'] = df['url'].fillna(df.get('page'))
-                if "item" in df.columns and "item_name" not in df.columns:
-                    df["item_name"] = df["item"]
-                if "issue" not in df.columns and "issue_name" in df.columns:
-                    df["issue"] = df["issue_name"]
-                last_candidates = [c for c in df.columns if "last" in c and "crawl" in c]
-                if last_candidates and "last_crawled" not in df.columns:
-                    df["last_crawled"] = df[last_candidates[0]]
-                details_frames.append(df)
-            else:
-                # fallback for metrics
-                metrics_cols = [c for c in df.columns if c in ("impressions","clicks","ctr","position")]
-                if metrics_cols:
-                    metrics_frames.append(df)
-                continue
+        # Detect Chart sheet for metrics
+        elif sheet.lower() == "chart":
+            metrics_cols = [c for c in df.columns if c.lower() in ("impressions","clicks","ctr","position")]
+            if metrics_cols:
+                metrics_frames.append(df)
+            continue
 
     details_df = pd.concat(details_frames, ignore_index=True) if details_frames else pd.DataFrame()
     metrics_df = pd.concat(metrics_frames, ignore_index=True) if metrics_frames else pd.DataFrame()
@@ -257,13 +230,11 @@ def get_mapping_dict():
 # BLOCK 8: Upload (fixed + pyarrow-safe dates)
 # =================================================
 def upload_to_bq(df):
-    """Schema-safe upload. Operates on the `df` parameter (no use of final_df)."""
     if df is None or df.empty:
         print("[INFO] No new rows to upload.")
         return
 
     table_ref = bq_client.dataset(DATASET_ID).table(TABLE_ID)
-
     try:
         table = bq_client.get_table(table_ref)
         allowed_cols = [f.name for f in table.schema]
@@ -330,24 +301,20 @@ def main():
             print(f"[INFO] No data found in {fname} — skipping.")
             continue
 
-        # map page/item_name from Summary Table if present
-        if details_df.empty and "valid" in fname.lower():
-            xls = pd.ExcelFile(file_path)
-            if "Table" in xls.sheet_names:
-                df_table = pd.read_excel(xls, sheet_name="Table")
-                df_table_cols = [c.strip().lower().replace(" ", "_") for c in df_table.columns]
-                df_table.columns = df_table_cols
-                if "url" in df_table.columns:
-                    df_table["page"] = df_table["url"]
-                if "item_name" in df_table.columns:
-                    df_table["item_name"] = df_table["item_name"]
-                details_df = df_table
+        details_df['url'] = details_df.get('url').fillna(details_df.get('page')) if not details_df.empty else None
+        details_df = details_df[details_df['url'].notna()] if not details_df.empty else pd.DataFrame()
 
         details_df['site'] = site
         details_df['date'] = date_val
         details_df['enhancement_name'] = enhancement_name
         details_df['status'] = details_df.get('status').fillna(status_hint) if 'status' in details_df.columns else status_hint
         details_df['status'] = details_df['status'].apply(lambda v: str(v).strip() if v else None)
+
+        # NEW: item_name extraction from Table sheet
+        if 'item_name' in details_df.columns:
+            details_df['item_name'] = details_df['item_name']
+
+        details_df['issue_name'] = details_df.get('issue')
         details_df['fetch_id'] = FETCH_ID
         details_df['fetch_date'] = FETCH_DATE
         details_df['source_file'] = source_file
@@ -362,11 +329,12 @@ def main():
                 new_df[c] = None
         new_df = new_df[FINAL_COLUMNS]
 
-        # inject metrics_df values dynamically from Chart sheet (Details files)
+        # NEW: inject metrics_df values dynamically (Impressions, Clicks, CTR, Position)
         if not metrics_df.empty:
             for metric_col in ["impressions","clicks","ctr","position"]:
-                if metric_col in metrics_df.columns:
-                    new_df[metric_col] = metrics_df[metric_col].iloc[0]
+                metric_excel_col = metric_col.capitalize() if metric_col=="impressions" else metric_col
+                if metric_excel_col in metrics_df.columns:
+                    new_df[metric_col] = metrics_df[metric_excel_col].iloc[0]
 
         all_new.append(new_df)
 
