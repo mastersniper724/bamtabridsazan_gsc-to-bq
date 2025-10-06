@@ -268,10 +268,10 @@ def upload_to_bq(df):
         return
     try:
         job_config = bigquery.LoadJobConfig(write_disposition="WRITE_APPEND")
-	# مثال تبدیل ستون‌های تاریخ به datetime
+		# مثال تبدیل ستون‌های تاریخ به datetime
         for date_col in ["date", "last_crawled", "fetch_date"]:
             if date_col in final_df.columns:
-		final_df[date_col] = pd.to_datetime(final_df[date_col], errors='coerce').dt.date
+				final_df[date_col] = pd.to_datetime(final_df[date_col], errors='coerce').dt.date
         
         job = bq_client.load_table_from_dataframe(df, f"{PROJECT_ID}.{DATASET_ID}.{TABLE_ID}", job_config=job_config)
         job.result()
