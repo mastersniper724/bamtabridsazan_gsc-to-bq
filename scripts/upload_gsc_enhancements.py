@@ -186,6 +186,7 @@ def parse_excel_file(file_path):
 
             # ✅ اضافه کردن df_chart به لیست metrics_frames
             metrics_frames.append(df_chart)
+            print(f"[INFO] Added metrics from {file_path}: {metrics_frames}")
 
             print(f"[INFO] Chart sheet read successfully from {file_path}, rows: {len(df_chart)}")
 
