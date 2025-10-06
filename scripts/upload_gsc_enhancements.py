@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 # ============================================================
 # File: upload_gsc_enhancements.py
-# Revision: Rev.26 — Fix URL Series issue, dynamic metric injection, preserve all v21 features
+# Revision: Rev.28 — Fix URL Series issue, dynamic metric injection, preserve all v21 features
 # Purpose: Parse GSC Enhancement XLSX exports (placed in gsc_enhancements/),
 #          build per-URL raw enhancements table and load to BigQuery with dedupe.
 # ============================================================
@@ -239,45 +239,56 @@ def get_mapping_dict():
         return dict(zip(df['enh_norm'], df['SearchAppearance']))
     except Exception:
         return {}
-
 # =================================================
-# BLOCK 8: Upload
+# BLOCK 8: Upload (fixed)
 # =================================================
 def upload_to_bq(df):
-    if df.empty:
+    """Schema-safe upload. Operates on the `df` parameter (no use of final_df)."""
+    if df is None or df.empty:
         print("[INFO] No new rows to upload.")
         return
+
     table_ref = bq_client.dataset(DATASET_ID).table(TABLE_ID)
+
+    # read target schema if table exists, otherwise fall back to FINAL_COLUMNS
     try:
         table = bq_client.get_table(table_ref)
         allowed_cols = [f.name for f in table.schema]
     except Exception:
         allowed_cols = FINAL_COLUMNS
+
+    # work on a copy
     df = df.copy()
+
+    # ensure all allowed columns exist (avoid missing-col errors)
     for c in allowed_cols:
         if c not in df.columns:
             df[c] = None
+
+    # keep only allowed columns and reorder to match table schema
     df = df[allowed_cols]
-    # convert date-like columns
-    for dcol in ['date','last_crawled','fetch_date']:
+
+    # convert date-like columns to date objects (pyarrow / BigQuery friendly)
+    for dcol in ['date', 'last_crawled', 'fetch_date']:
         if dcol in df.columns:
             df[dcol] = pd.to_datetime(df[dcol], errors='coerce').dt.date
+
+    # optional debug preview (local CSV)
     if DEBUG_MODE:
-        df.to_csv(f"gsc_enhancements_upload_preview_{FETCH_ID}.csv", index=False)
-        print(f"[DEBUG] Wrote preview CSV: rows={len(df)}")
+        out_fn = f"gsc_enhancements_upload_preview_{FETCH_ID}.csv"
+        df.to_csv(out_fn, index=False)
+        print(f"[DEBUG] Wrote preview CSV: {out_fn} (rows: {len(df)})")
         return
+
+    # upload to BQ
     try:
         job_config = bigquery.LoadJobConfig(write_disposition="WRITE_APPEND")
-        # مثال تبدیل ستون‌های تاریخ به datetime
-        for date_col in ["date", "last_crawled", "fetch_date"]:
-            if date_col in final_df.columns:
-                final_df[date_col] = pd.to_datetime(final_df[date_col], errors='coerce').dt.date
-        
         job = bq_client.load_table_from_dataframe(df, f"{PROJECT_ID}.{DATASET_ID}.{TABLE_ID}", job_config=job_config)
         job.result()
         print(f"[INFO] Inserted {len(df)} rows to {PROJECT_ID}.{DATASET_ID}.{TABLE_ID}.")
     except Exception as e:
         print(f"[ERROR] Failed to insert rows: {e}")
+
 
 # =================================================
 # BLOCK 9: MAIN
