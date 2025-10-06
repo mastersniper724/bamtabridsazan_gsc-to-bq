@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 # ============================================================
 # File: upload_gsc_enhancements.py
-# Revision: Rev.17 — Combine v15 & v16 logic, robust Details parsing,
+# Revision: Rev.18 — Combine v15 & v16 logic, robust Details parsing,
 #                 SHA-256 unique_key, schema-safe BQ upload, mapping lookup.
 # Purpose: Parse GSC Enhancement XLSX exports (placed in gsc_enhancements/),
 #          build per-URL raw enhancements table and load to BigQuery with dedupe.
@@ -351,15 +351,15 @@ def main():
 
     all_new = []
 
-    if not os.path.isdir(GITHUB_LOCAL_PATH):
-        print(f"[ERROR] Local path '{GITHUB_LOCAL_PATH}' not found. Exiting.")
+    if not os.path.isdir(enhancement_folder):
+        print(f"[ERROR] Local path '{enhancement_folder}' not found. Exiting.")
         return
 
     # iterate files at root (no subfolders required)
-    for fname in sorted(os.listdir(GITHUB_LOCAL_PATH)):
+    for fname in sorted(os.listdir(enhancement_folder)):
         if not fname.lower().endswith(".xlsx"):
             continue
-        file_path = os.path.join(GITHUB_LOCAL_PATH, fname)
+        file_path = os.path.join(enhancement_folder, fname)
         meta = parse_filename_metadata(fname)
         site = meta.get("site") or ""
         enhancement_name = meta.get("enhancement_name") or ""
