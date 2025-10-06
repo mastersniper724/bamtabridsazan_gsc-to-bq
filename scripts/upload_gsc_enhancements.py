@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 # ============================================================
 # File: upload_gsc_enhancements.py
-# Revision: Rev.28 — Fix URL Series issue, dynamic metric injection, preserve all v21 features
+# Revision: Rev.29 — Fix URL Series issue, dynamic metric injection, preserve all v21 features
 # Purpose: Parse GSC Enhancement XLSX exports (placed in gsc_enhancements/),
 #          build per-URL raw enhancements table and load to BigQuery with dedupe.
 # ============================================================
@@ -239,8 +239,9 @@ def get_mapping_dict():
         return dict(zip(df['enh_norm'], df['SearchAppearance']))
     except Exception:
         return {}
+
 # =================================================
-# BLOCK 8: Upload (fixed)
+# BLOCK 8: Upload (fixed + pyarrow-safe dates)
 # =================================================
 def upload_to_bq(df):
     """Schema-safe upload. Operates on the `df` parameter (no use of final_df)."""
@@ -270,8 +271,13 @@ def upload_to_bq(df):
 
     # convert date-like columns to date objects (pyarrow / BigQuery friendly)
     for dcol in ['date', 'last_crawled', 'fetch_date']:
-        if dcol in df.columns:
-            df[dcol] = pd.to_datetime(df[dcol], errors='coerce').dt.date
+        if dcol not in df.columns:
+            df[dcol] = pd.NaT
+    for dcol in ['date', 'last_crawled', 'fetch_date']:
+        df[dcol] = pd.to_datetime(df[dcol], errors='coerce')
+    for dcol in ['date', 'last_crawled', 'fetch_date']:
+        df[dcol] = df[dcol].dt.strftime("%Y-%m-%d")
+    df = df.where(pd.notnull(df), None)
 
     # optional debug preview (local CSV)
     if DEBUG_MODE:
