@@ -1,4 +1,4 @@
-name: GSC Full Fetch (OtherSearchTypes) to BigQuery (rev0)
+name: GSC Full Fetch (OtherSearchTypes) to BigQuery (rev1)
 
 on:
   workflow_dispatch:
@@ -35,7 +35,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install google-auth google-auth-oauthlib google-auth-httplib2 google-api-python-client google-cloud-bigquery tqdm pandas pyarrow db-dtypes pandas_gbq
+          pip install google-auth google-auth-oauthlib google-auth-httplib2 google-api-python-client google-cloud-bigquery google-cloud-bigquery-storage tqdm pandas pyarrow db-dtypes pandas_gbq
 
       - name: Write GCP credentials file
         run: |

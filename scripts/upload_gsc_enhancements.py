@@ -2,8 +2,9 @@
 # -*- coding: utf-8 -*-
 # ============================================================
 # File: upload_gsc_enhancements.py
-# Revision: Rev.21 — Keep v20 logic, add Summary/Chart parsing,
-#                 Impressions/metrics, URL fix, standardized appearance_type
+# Revision: Rev.22 — Fix URL Series issue, dynamic metric injection, preserve all v21 features
+# Purpose: Parse GSC Enhancement XLSX exports (placed in gsc_enhancements/),
+#          build per-URL raw enhancements table and load to BigQuery with dedupe.
 # ============================================================
 
 import os
@@ -12,6 +13,7 @@ import argparse
 import hashlib
 from datetime import datetime, date
 from uuid import uuid4
+import warnings
 
 import pandas as pd
 from google.cloud import bigquery
@@ -26,22 +28,29 @@ TABLE_ID = "bamtabridsazan__gsc__raw_enhancements"
 MAPPING_TABLE = f"{PROJECT_ID}.{DATASET_ID}.bamtabridsazan__gsc__searchappearance_enhancement_mapping"
 GITHUB_LOCAL_PATH_DEFAULT = "gsc_enhancements"
 
+# Final schema columns (must match table schema if exists)
 FINAL_COLUMNS = [
-    "site", "date", "enhancement_name", "appearance_type", "page",
-    "item_name", "issue_name", "last_crawled", "status",
-    "fetch_id", "fetch_date", "source_file", "unique_key",
-    "impressions", "clicks", "ctr", "position"
+    "site",
+    "date",
+    "enhancement_name",
+    "appearance_type",
+    "page",
+    "item_name",
+    "issue_name",
+    "last_crawled",
+    "status",
+    "fetch_id",
+    "fetch_date",
+    "source_file",
+    "unique_key",
+    # Metrics dynamic
+    "impressions",
+    "clicks",
+    "ctr",
+    "position"
 ]
-DEBUG_MODE = False
 
-# Standardized mapping for appearance_type if mapping not found
-STANDARD_APPEARANCE_MAPPING = {
-    "faq": "FAQ_RICH_RESULT",
-    "breadcrumb": "BREADCRUMB",
-    "review snippets": "REVIEW_SNIPPET",
-    "videos": "VIDEO",
-    "video-indexing": "VIDEO_INDEXING"
-}
+DEBUG_MODE = False  # حالت پیش‌فرض
 
 # =================================================
 # BLOCK 2: ARGPARSE
@@ -72,25 +81,20 @@ FETCH_ID = now_fetch_id()
 FETCH_DATE = datetime.utcnow().date()
 
 # =================================================
-# BLOCK 4: PARSING HELPERS (filename -> metadata)
+# BLOCK 4: PARSING HELPERS
 # =================================================
 def parse_filename_metadata(filename):
     base = os.path.basename(filename)
     name = re.sub(r'\.xlsx$', '', base, flags=re.IGNORECASE)
     m = re.search(r'^(?P<prefix>.+)-(?P<date>\d{4}-\d{2}-\d{2})$', name)
     if not m:
-        return {
-            "site_raw": None, "site": None,
-            "enhancement_name": None, "date": None,
-            "status_hint": None, "source_file": base
-        }
+        return {"site_raw": None, "site": None, "enhancement_name": None, "date": None, "status_hint": None, "source_file": base}
     prefix = m.group("prefix")
     date_str = m.group("date")
     try:
         dt = datetime.strptime(date_str, "%Y-%m-%d").date()
-    except:
+    except Exception:
         dt = None
-
     parts = prefix.split("-")
     site_raw = parts[0] if parts else ""
     status_hint = None
@@ -100,22 +104,16 @@ def parse_filename_metadata(filename):
         enh_tokens = parts[1:-1]
     else:
         enh_tokens = parts[1:]
-
     enhancement_name = "-".join(enh_tokens).strip()
     site = site_raw
     if site and site.lower().endswith(".com"):
         site = site[:-4]
     else:
         site = re.sub(r'\.[a-z]{2,}$', '', site)
-
-    return {
-        "site_raw": site_raw, "site": site,
-        "enhancement_name": enhancement_name, "date": dt,
-        "status_hint": status_hint, "source_file": base
-    }
+    return {"site_raw": site_raw, "site": site, "enhancement_name": enhancement_name, "date": dt, "status_hint": status_hint, "source_file": base}
 
 # =================================================
-# BLOCK 5: EXCEL PARSE (Details + Summary/Chart)
+# BLOCK 5: EXCEL PARSE (Details + Chart)
 # =================================================
 def _normalize_columns(cols):
     normalized = []
@@ -127,14 +125,15 @@ def _normalize_columns(cols):
         normalized.append(s)
     return normalized
 
-def parse_excel_file(file_path, enhancement_name_hint=None):
+def parse_excel_file(file_path):
     try:
         xls = pd.ExcelFile(file_path)
     except Exception as e:
         print(f"[WARN] Cannot open {file_path}: {e}")
-        return pd.DataFrame()
+        return pd.DataFrame(), pd.DataFrame()
 
-    all_frames = []
+    details_frames = []
+    metrics_frames = []
 
     for sheet in xls.sheet_names:
         try:
@@ -144,18 +143,20 @@ def parse_excel_file(file_path, enhancement_name_hint=None):
             continue
         if df is None or df.empty:
             continue
-
         df_cols_norm = _normalize_columns(df.columns.tolist())
         rename_map = {orig: norm for orig, norm in zip(df.columns.tolist(), df_cols_norm)}
         df = df.rename(columns=rename_map)
 
-        # --- Details-like sheet (has URL/Page)
-        if any(c in df.columns for c in ("url","page","link","page_url")):
+        # Details-like detection
+        url_cols = [c for c in df.columns if c in ("url","page","link","page_url")]
+        if url_cols:
             for c in ("url","page","item_name","item","issue","issue_name","last_crawled","status"):
                 if c not in df.columns:
                     df[c] = None
-            if "url" not in df.columns and "page" in df.columns:
-                df["url"] = df["page"]
+            if 'url' not in df.columns and 'page' in df.columns:
+                df['url'] = df['page']
+            if 'url' in df.columns:
+                df['url'] = df['url'].fillna(df.get('page'))
             if "item" in df.columns and "item_name" not in df.columns:
                 df["item_name"] = df["item"]
             if "issue" not in df.columns and "issue_name" in df.columns:
@@ -163,36 +164,24 @@ def parse_excel_file(file_path, enhancement_name_hint=None):
             last_candidates = [c for c in df.columns if "last" in c and "crawl" in c]
             if last_candidates and "last_crawled" not in df.columns:
                 df["last_crawled"] = df[last_candidates[0]]
-            all_frames.append(df)
+            details_frames.append(df)
+        else:
+            # Chart/metric detection
+            metrics_cols = [c for c in df.columns if c in ("impressions","clicks","ctr","position")]
+            if metrics_cols:
+                metrics_frames.append(df)
+            continue
 
-        # --- Summary/Chart metric sheet
-        elif sheet.lower() in ("chart", "summary"):
-            metrics_df = pd.DataFrame()
-            # copy available metrics
-            for col in ("impressions","clicks","ctr","position"):
-                if col in df.columns:
-                    metrics_df[col] = df[col]
-            metrics_df['page'] = df.get('url') if 'url' in df.columns else None
-            all_frames.append(metrics_df)
-
-    if all_frames:
-        final_df = pd.concat(all_frames, ignore_index=True)
-        # normalize important columns
-        for c in ['url','page','item_name','issue','last_crawled','status']:
-            if c in final_df.columns:
-                final_df[c] = final_df[c].astype(object).where(~final_df[c].isna(), None)
-        if 'last_crawled' in final_df.columns:
-            final_df['last_crawled'] = pd.to_datetime(final_df['last_crawled'], errors='coerce').dt.date
-        return final_df
-    else:
-        return pd.DataFrame()
+    details_df = pd.concat(details_frames, ignore_index=True) if details_frames else pd.DataFrame()
+    metrics_df = pd.concat(metrics_frames, ignore_index=True) if metrics_frames else pd.DataFrame()
+    return details_df, metrics_df
 
 # =================================================
-# BLOCK 6: Unique key (SHA-256)
+# BLOCK 6: Unique key
 # =================================================
 def build_unique_key_series(df, site, enhancement_name, date_val, status_col='status'):
     def row_key(r):
-        page = r.get('url') or r.get('page') or ""
+        page = r.get('url') or ""
         status = r.get(status_col) or ""
         lastc = r.get('last_crawled')
         if isinstance(lastc, (datetime,)):
@@ -204,7 +193,7 @@ def build_unique_key_series(df, site, enhancement_name, date_val, status_col='st
     return df.apply(row_key, axis=1)
 
 # =================================================
-# BLOCK 7: BigQuery helpers
+# BLOCK 7: BQ helpers
 # =================================================
 def ensure_table_exists():
     table_ref = bq_client.dataset(DATASET_ID).table(TABLE_ID)
@@ -212,25 +201,10 @@ def ensure_table_exists():
         bq_client.get_table(table_ref)
         print(f"[INFO] Table {DATASET_ID}.{TABLE_ID} exists.")
     except Exception:
-        schema = [
-            SchemaField("site", "STRING"),
-            SchemaField("date", "DATE"),
-            SchemaField("enhancement_name", "STRING"),
-            SchemaField("appearance_type", "STRING"),
-            SchemaField("page", "STRING"),
-            SchemaField("item_name", "STRING"),
-            SchemaField("issue_name", "STRING"),
-            SchemaField("last_crawled", "DATE"),
-            SchemaField("status", "STRING"),
-            SchemaField("fetch_id", "STRING"),
-            SchemaField("fetch_date", "DATE"),
-            SchemaField("source_file", "STRING"),
-            SchemaField("unique_key", "STRING"),
-            SchemaField("impressions", "INTEGER"),
-            SchemaField("clicks", "INTEGER"),
-            SchemaField("ctr", "FLOAT"),
-            SchemaField("position", "FLOAT")
-        ]
+        print(f"[INFO] Table {DATASET_ID}.{TABLE_ID} not found. Creating...")
+        schema = [SchemaField(c,"STRING") for c in FINAL_COLUMNS]
+        # date columns
+        schema += [SchemaField("date","DATE"), SchemaField("last_crawled","DATE"), SchemaField("fetch_date","DATE")]
         table = bigquery.Table(table_ref, schema=schema)
         bq_client.create_table(table)
         print(f"[INFO] Table {DATASET_ID}.{TABLE_ID} created.")
@@ -240,8 +214,11 @@ def get_existing_unique_keys():
     try:
         query = f"SELECT unique_key FROM `{table_ref}`"
         df = bq_client.query(query).to_dataframe()
-        return set(df['unique_key'].astype(str).tolist())
-    except:
+        keys = set(df['unique_key'].astype(str).tolist())
+        print(f"[INFO] Retrieved {len(keys)} existing keys from BigQuery.")
+        return keys
+    except Exception as e:
+        print(f"[WARN] Could not fetch existing keys: {e}")
         return set()
 
 def get_mapping_dict():
@@ -249,7 +226,7 @@ def get_mapping_dict():
         df = bq_client.query(f"SELECT SearchAppearance, Enhancement_Name FROM `{MAPPING_TABLE}`").to_dataframe()
         df['enh_norm'] = df['Enhancement_Name'].astype(str).str.strip().str.lower()
         return dict(zip(df['enh_norm'], df['SearchAppearance']))
-    except:
+    except Exception:
         return {}
 
 # =================================================
@@ -263,26 +240,21 @@ def upload_to_bq(df):
     try:
         table = bq_client.get_table(table_ref)
         allowed_cols = [f.name for f in table.schema]
-    except:
+    except Exception:
         allowed_cols = FINAL_COLUMNS
-
     df = df.copy()
     for c in allowed_cols:
         if c not in df.columns:
             df[c] = None
     df = df[allowed_cols]
-
-    # convert date-like
-    for col in ['date','last_crawled','fetch_date']:
-        if col in df.columns:
-            df[col] = pd.to_datetime(df[col], errors='coerce').dt.date
-
+    # convert date-like columns
+    for dcol in ['date','last_crawled','fetch_date']:
+        if dcol in df.columns:
+            df[dcol] = pd.to_datetime(df[dcol], errors='coerce').dt.date
     if DEBUG_MODE:
-        out_fn = f"gsc_enhancements_upload_preview_{FETCH_ID}.csv"
-        df.to_csv(out_fn, index=False)
-        print(f"[DEBUG] Wrote preview CSV: {out_fn} (rows: {len(df)})")
+        df.to_csv(f"gsc_enhancements_upload_preview_{FETCH_ID}.csv", index=False)
+        print(f"[DEBUG] Wrote preview CSV: rows={len(df)}")
         return
-
     try:
         job_config = bigquery.LoadJobConfig(write_disposition="WRITE_APPEND")
         job = bq_client.load_table_from_dataframe(df, f"{PROJECT_ID}.{DATASET_ID}.{TABLE_ID}", job_config=job_config)
@@ -315,42 +287,43 @@ def main():
         status_hint = meta.get("status_hint")
         source_file = meta.get("source_file")
 
-        print(f"[INFO] Processing file: {fname}  -> enhancement='{enhancement_name}', date={date_val}, status_hint={status_hint}")
+        print(f"[INFO] Processing file: {fname} -> enhancement='{enhancement_name}', date={date_val}, status_hint={status_hint}")
 
-        details_df = parse_excel_file(file_path, enhancement_name_hint=enhancement_name)
-        if details_df.empty:
-            print(f"[INFO] No detail rows found in {fname} — skipping per-URL import.")
+        details_df, metrics_df = parse_excel_file(file_path)
+        if details_df.empty and metrics_df.empty:
+            print(f"[INFO] No data found in {fname} — skipping.")
             continue
 
-        details_df['url'] = details_df.get('url') or details_df.get('page')
-        details_df = details_df[details_df['url'].notna() & details_df['url'].astype(str).str.strip().ne('')].copy()
+        # normalize columns
+        details_df['url'] = details_df.get('url').fillna(details_df.get('page')) if not details_df.empty else None
+        details_df = details_df[details_df['url'].notna()] if not details_df.empty else pd.DataFrame()
 
         details_df['site'] = site
         details_df['date'] = date_val
         details_df['enhancement_name'] = enhancement_name
         details_df['status'] = details_df.get('status').fillna(status_hint) if 'status' in details_df.columns else status_hint
-        details_df['status'] = details_df['status'].apply(lambda v: (str(v).strip() if v and str(v).strip().lower()!='nan' else None))
+        details_df['status'] = details_df['status'].apply(lambda v: str(v).strip() if v else None)
         details_df['item_name'] = details_df.get('item_name')
         details_df['issue_name'] = details_df.get('issue')
         details_df['fetch_id'] = FETCH_ID
         details_df['fetch_date'] = FETCH_DATE
         details_df['source_file'] = source_file
-
         enh_norm = enhancement_name.strip().lower() if enhancement_name else ""
-        details_df['appearance_type'] = mapping_dict.get(enh_norm, STANDARD_APPEARANCE_MAPPING.get(enh_norm))
+        details_df['appearance_type'] = mapping_dict.get(enh_norm)
 
         details_df['unique_key'] = build_unique_key_series(details_df, site, enhancement_name, date_val, status_col='status')
-
         new_df = details_df[~details_df['unique_key'].isin(existing_keys)].copy()
-        if new_df.empty:
-            print(f"[INFO] All rows from {fname} are duplicates (skipped).")
-            continue
         existing_keys.update(new_df['unique_key'].tolist())
-
         for c in FINAL_COLUMNS:
             if c not in new_df.columns:
                 new_df[c] = None
         new_df = new_df[FINAL_COLUMNS]
+
+        # inject metrics_df values dynamically
+        if not metrics_df.empty:
+            for metric_col in ["impressions","clicks","ctr","position"]:
+                if metric_col in metrics_df.columns:
+                    new_df[metric_col] = metrics_df[metric_col].iloc[0]  # assign first row from Chart
 
         all_new.append(new_df)
 
