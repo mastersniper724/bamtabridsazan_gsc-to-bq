@@ -414,6 +414,21 @@ def main():
                 else:
                     details_df[mcol] = None
 
+        # =================================================
+        # BLOCK 9.1: Merge metrics (Rev.33 fix)
+        # =================================================
+        if not metrics_df.empty and not details_df.empty:
+            # اضافه کردن چاپ برای بررسی نام ستون‌ها
+            print("Metrics columns in Excel:", metrics_df.columns.tolist())
+
+            # merge با lowercase
+            metrics_df.columns = metrics_df.columns.str.strip().str.lower()
+            for mcol in ['impressions','clicks','ctr','position']:
+                if mcol in metrics_df.columns:
+                    details_df[mcol] = metrics_df[mcol]
+                else:
+                    details_df[mcol] = None
+
         # unique key
         details_df['unique_key'] = build_unique_key_series(details_df, site, enhancement_name, date_val)
         all_new.append(details_df)
