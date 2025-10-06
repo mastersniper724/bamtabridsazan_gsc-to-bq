@@ -162,72 +162,72 @@ def parse_excel_file(file_path):
     # =================================================
     # BLOCK 5.2: Extract "Chart" sheet for Metrics (Rev.35)
     # =================================================
-            # =================================================
-        # BLOCK 5.2: Read Sheets (Rev.45 Debug)
-        # =================================================
-        import os
-
-        details_frames = []
+    def extract_chart_metrics(file_path):
+        """
+        Reads the 'Chart' sheet from a given Excel file and returns a DataFrame
+        containing metric columns (impressions, clicks, ctr, position) and other relevant columns.
+        """
         metrics_frames = []
 
-        print(f"🧩 Reading Excel file: {file_path}")
-        if os.path.exists(file_path):
+        try:
+            xls = pd.ExcelFile(file_path)
+        except Exception as e:
+            print(f"[WARN] Cannot open {file_path}: {e}")
+            return pd.DataFrame()
+
+        if "Chart" in xls.sheet_names:
             try:
-                xls = pd.ExcelFile(file_path)
-                print("✅ Available sheets:", xls.sheet_names)
+                # --------------------------
+                # خواندن شیت Chart
+                # --------------------------
+                df_chart = pd.read_excel(xls, sheet_name="Chart")
+                df_chart.columns = df_chart.columns.str.strip().str.lower()  # استانداردسازی نام ستون‌ها
 
-                # Log columns of each sheet
-                for s in xls.sheet_names:
-                    df_tmp = pd.read_excel(xls, sheet_name=s)
-                    print(f"🔹 Sheet '{s}' columns:", df_tmp.columns.tolist())
+                # --------------------------
+                # اضافه کردن ستون‌های ضروری در صورت نبودشان
+                # --------------------------
+                required_cols = [
+                    "page", "appearance_type", "impressions", "clicks", "ctr",
+                    "position", "item_name", "issue_name", "last_crawled", "status"
+                ]
+                for col in required_cols:
+                    if col not in df_chart.columns:
+                        df_chart[col] = None
 
-                # --- Details sheet (main data)
-                if "Details" in xls.sheet_names:
-                    df_details = pd.read_excel(xls, sheet_name="Details")
-                    if not df_details.empty:
-                        print("✅ Details sheet loaded, rows:", len(df_details))
-                        details_frames.append(df_details)
-                    else:
-                        print("⚠️ Details sheet is empty!")
+                # --------------------------
+                # حذف ردیف‌های کاملاً خالی
+                # --------------------------
+                df_chart = df_chart.dropna(how="all")
+
+                # --------------------------
+                # تبدیل نوع داده‌ای ستون‌های متریک
+                # --------------------------
+                metric_cols = ["impressions", "clicks", "ctr", "position"]
+                for col in metric_cols:
+                    if col in df_chart.columns:
+                        df_chart[col] = pd.to_numeric(df_chart[col], errors="coerce")
+
+                # --------------------------
+                # بررسی ستون‌های متریک موجود
+                # --------------------------
+                available_cols = [c for c in metric_cols if c in df_chart.columns]
+                if available_cols:
+                    rename_map = {c: c.lower() for c in available_cols}
+                    df_chart = df_chart.rename(columns=rename_map)
+                    print(f"[INFO] Added metrics from {file_path}: {available_cols}")
                 else:
-                    print("⚠️ 'Details' sheet not found in Excel file")
+                    print(f"[WARN] No metric columns found in {file_path}. Available: {list(df_chart.columns)}")
 
-                # --- Chart sheet (metrics)
-                if "Chart" in xls.sheet_names:
-                    df_chart = pd.read_excel(xls, sheet_name="Chart")
-                    if not df_chart.empty:
-                        print("✅ Chart sheet loaded, rows:", len(df_chart))
-                        metrics_frames.append(df_chart)
-                    else:
-                        print("⚠️ Chart sheet is empty!")
-                else:
-                    print("⚠️ 'Chart' sheet not found in Excel file")
-
-                # Merge all details
-                if details_frames:
-                    details_df = pd.concat(details_frames, ignore_index=True)
-                    print("🧩 Combined details rows:", len(details_df))
-                else:
-                    details_df = pd.DataFrame()
-                    print("⚠️ No details data found")
-
-                # Merge all metrics
-                if metrics_frames:
-                    metrics_df = pd.concat(metrics_frames, ignore_index=True)
-                    print("🧩 Combined metrics rows:", len(metrics_df))
-                else:
-                    metrics_df = pd.DataFrame()
-                    print("⚠️ No metrics data found")
+                print(f"[INFO] Chart sheet read successfully from {file_path}, rows: {len(df_chart)}")
+                metrics_frames.append(df_chart)
 
             except Exception as e:
-                print("❌ Error reading Excel file:", e)
-                details_df = pd.DataFrame()
-                metrics_df = pd.DataFrame()
-        else:
-            print(f"❌ File not found: {file_path}")
-            details_df = pd.DataFrame()
-            metrics_df = pd.DataFrame()
+                print(f"[WARN] Failed to read Chart sheet in {file_path}: {e}")
+                df_chart = pd.DataFrame()
 
+        return pd.concat(metrics_frames, ignore_index=True) if metrics_frames else pd.DataFrame()
+
+    metrics_df = extract_chart_metrics(file_path)
 
     # ======================
     # Combine details
@@ -414,32 +414,20 @@ def main():
                 else:
                     details_df[mcol] = None
 
-                # =================================================
-        # BLOCK 9.1: Merge metrics (Rev.45 Debug)
+        # =================================================
+        # BLOCK 9.1: Merge metrics (Rev.33 fix)
         # =================================================
         if not metrics_df.empty and not details_df.empty:
-            print("📊 Merging metrics into details...")
+            # چاپ نام ستون‌ها برای دیباگ
             print("Metrics columns in Excel:", metrics_df.columns.tolist())
-            print("Details columns before merge:", details_df.columns.tolist())
 
-            # Try to match metrics columns based on common names
-            for mcol in ['impressions', 'clicks', 'ctr', 'position']:
-                mcol_excel = mcol.capitalize() if mcol != 'ctr' else 'CTR'
-                if mcol_excel in metrics_df.columns:
-                    # Apply single value or broadcast if metrics is single-row
-                    if len(metrics_df[mcol_excel]) == 1:
-                        val = metrics_df[mcol_excel].iloc[0]
-                        details_df[mcol] = val
-                        print(f"✅ Filled '{mcol}' with constant value:", val)
-                    else:
-                        details_df[mcol] = metrics_df[mcol_excel]
-                        print(f"✅ Mapped '{mcol}' column from metrics_df")
+            # merge با lowercase
+            metrics_df.columns = metrics_df.columns.str.strip().str.lower()
+            for mcol in ['impressions','clicks','ctr','position']:
+                if mcol in metrics_df.columns:
+                    details_df[mcol] = metrics_df[mcol]
                 else:
                     details_df[mcol] = None
-                    print(f"⚠️ Column '{mcol_excel}' not found in metrics_df")
-        else:
-            print("⚠️ Skipping merge — one of dataframes is empty.")
-
 
         # unique key
         details_df['unique_key'] = build_unique_key_series(details_df, site, enhancement_name, date_val)
