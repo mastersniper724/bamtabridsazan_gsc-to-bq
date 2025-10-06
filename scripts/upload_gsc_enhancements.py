@@ -163,6 +163,7 @@ def parse_excel_file(file_path):
 # =================================================
 # BLOCK 5.2: Extract "Chart" sheet for Metrics (fix for Rev.34)
 # =================================================
+xls = pd.ExcelFile(file_path)
 if "Chart" in xls.sheet_names:
     try:
         # --------------------------
