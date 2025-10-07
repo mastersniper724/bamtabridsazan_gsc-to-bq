@@ -362,4 +362,4 @@ def main():
             details_df['unique_key'] = build_unique_key_series(details_df, site, enhancement_name, date_val)
             # Remove duplicates within batch
             before_count = len(details_df)
-            details_df = details_df.drop_duplicates(subset=['unique_key']).
+            details_df = details_df.drop_duplicates(subset=['unique_key'])
