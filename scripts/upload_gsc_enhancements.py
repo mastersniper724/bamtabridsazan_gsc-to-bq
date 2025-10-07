@@ -164,10 +164,14 @@ def parse_excel_file(file_path):
                     df_chart[col] = None
             # Metrics conversion
             for col in ["impressions","clicks","position"]:
-                df_chart[col] = pd.to_numeric(df_chart[col], errors="coerce").fillna(0).astype(int)
+                if col in df_chart.columns:
+                    df_chart[col] = df_chart[col].replace('None', 0)
+                    df_chart[col] = pd.to_numeric(df_chart[col], errors="coerce").fillna(0).astype(int)
             # Handle CTR percentage strings
             if "ctr" in df_chart.columns:
-                df_chart["ctr"] = df_chart["ctr"].astype(str).str.replace("%","").astype(float)/100
+                df_chart["ctr"] = df_chart["ctr"].replace('None', 0)
+                df_chart["ctr"] = pd.to_numeric(df_chart["ctr"].astype(str).str.replace("%",""), errors="coerce").fillna(0)/100
+
             metrics_frames.append(df_chart)
         except Exception as e:
             print(f"[WARN] Failed to read Chart sheet: {e}")
@@ -315,7 +319,10 @@ def main():
             details_df['site'] = site
             details_df['date'] = date_val
             details_df['enhancement_name'] = enhancement_name
-            details_df['status'] = details_df.get('status', status_hint).fillna(status_hint or "Unknown")
+            if 'status' in details_df.columns:
+                details_df['status'] = details_df['status'].fillna(status_hint or "Unknown")
+            else:
+                details_df['status'] = status_hint or "Unknown"
             details_df['fetch_id'] = FETCH_ID
             details_df['fetch_date'] = FETCH_DATE
             details_df['source_file'] = source_file
