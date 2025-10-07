@@ -143,9 +143,21 @@ def parse_excel_file(file_path):
             df_table = pd.read_excel(xls, sheet_name="Table")
             if "Item name" in df_table.columns:
                 df_table['item_name'] = df_table['Item name']
-            url_cols = [c for c in df_table.columns if 'url' in c.lower() or 'page' in c.lower()]
-            if url_cols:
-                df_table['url'] = df_table[url_cols[0]]
+            # --- Detect and unify URL column ---
+            def detect_url_column(df):
+                for col in df.columns:
+                    cname = col.strip().lower()
+                    # ترجیح می‌دهیم ستون‌هایی با نام دقیق‌تر اولویت داشته باشن
+                    if cname in ['url', 'page']:
+                        return col
+                    if 'url' in cname or 'page' in cname:
+                        return col
+                    return None
+
+            url_col = detect_url_column(df_table)
+            
+            if url_col and url_col in df_table.columns:
+                df_table['url'] = df_table[url_col]
             else:
                 df_table['url'] = None
             details_frames.append(df_table)
