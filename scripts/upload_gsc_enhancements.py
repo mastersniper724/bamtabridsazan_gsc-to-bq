@@ -375,6 +375,8 @@ def main():
     if not final_df.empty:
         # Remove duplicates across all new rows
         final_df = final_df.drop_duplicates(subset=['unique_key']).reset_index(drop=True)
+        if not final_df.empty:
+            print(final_df[['enhancement_name','url','impressions','clicks','ctr','position']].head(20))
         print(f"[INFO] Total new rows to upload: {len(final_df)}")
     upload_to_bq(final_df)
 
