@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 # ============================================================
 # File: upload_gsc_enhancements.py
-# Revision: Rev.35 — Improved merge, dedupe, metrics handling, mapping, and logging
+# Revision: Rev.35.1 — Improved merge, dedupe, metrics handling, mapping, and logging
 # Purpose: Parse GSC Enhancement XLSX exports, build per-URL raw enhancements table, handle metrics safely, and load to BigQuery with dedupe.
 # ============================================================
 
@@ -155,7 +155,7 @@ def parse_excel_file(file_path):
                     return None
 
             url_col = detect_url_column(df_table)
-            
+
             if url_col and url_col in df_table.columns:
                 df_table['url'] = df_table[url_col]
             else:
@@ -176,11 +176,11 @@ def parse_excel_file(file_path):
             # Metrics conversion
             for col in ["impressions","clicks","position"]:
                 if col in df_chart.columns:
-                    df_chart[col] = df_chart[col].replace('None', 0)
-                    df_chart[col] = pd.to_numeric(df_chart[col], errors="coerce").fillna(0).astype(int)
+                    df_chart[col] = df_chart[col].replace(['None',''], 0)
+                    df_chart[col] = pd.to_numeric(df_chart[col], errors='coerce').fillna(0).astype(int)
             # Handle CTR percentage strings
             if "ctr" in df_chart.columns:
-                df_chart["ctr"] = df_chart["ctr"].replace('None', 0)
+                df_chart['ctr'] = df_chart['ctr'].replace(['None',''], 0)
                 df_chart["ctr"] = pd.to_numeric(df_chart["ctr"].astype(str).str.replace("%",""), errors="coerce").fillna(0)/100
 
             metrics_frames.append(df_chart)
@@ -349,6 +349,7 @@ def main():
 
             # Map enhancement_name -> appearance_type
             norm_name = enhancement_name.strip().lower()
+            mapping_dict = {k.strip().lower(): v for k,v in mapping_dict.items()}
             details_df['appearance_type'] = mapping_dict.get(norm_name, None)
 
             # Unique key
