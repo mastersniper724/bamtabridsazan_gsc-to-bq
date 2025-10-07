@@ -1,9 +1,9 @@
 name: GSC Enhancements Sync (R.2)
 
 on:
-  schedule:
+#  schedule:
     # اجرای روزانه ساعت 02:00 UTC (می‌تونی تغییر بدی)
-    - cron: "0 2 * * *"
+#    - cron: "0 2 * * *"
   workflow_dispatch:  # اجازه اجرای دستی از تب Actions
 
 jobs:
