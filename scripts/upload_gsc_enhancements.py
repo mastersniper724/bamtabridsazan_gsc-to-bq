@@ -359,7 +359,11 @@ def main():
         details_df['site'] = site
         details_df['date'] = date_val
         details_df['enhancement_name'] = enhancement_name
-        details_df['status'] = details_df.get('status').fillna(status_hint) if 'status' in details_df.columns else status_hint
+        safe_status_hint = status_hint if status_hint is not None else "Unknown"
+        if 'status' in details_df.columns:
+            details_df['status'] = details_df['status'].fillna(safe_status_hint)
+        else:
+            details_df['status'] = safe_status_hint
         details_df['fetch_id'] = FETCH_ID
         details_df['fetch_date'] = FETCH_DATE
         details_df['source_file'] = source_file
