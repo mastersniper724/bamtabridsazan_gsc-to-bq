@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 # ============================================================
 # File: upload_gsc_enhancements.py
-# Revision: Rev.35.1 — Improved merge, dedupe, metrics handling, mapping, and logging
+# Revision: Rev.35.2 — Added robust URL detection/ensuring and safe fallback handling
 # Purpose: Parse GSC Enhancement XLSX exports, build per-URL raw enhancements table, handle metrics safely, and load to BigQuery with dedupe.
 # ============================================================
 
@@ -114,9 +114,7 @@ def parse_filename_metadata(filename):
         site = re.sub(r'\.[a-z]{2,}$', '', site)
     return {"site_raw": site_raw, "site": site, "enhancement_name": enhancement_name, "date": dt, "status_hint": status_hint, "source_file": base}
 
-# =================================================
-# BLOCK 5: EXCEL PARSE (Details + Chart)
-# =================================================
+# Utility: normalize column names helper (kept for compatibility)
 def _normalize_columns(cols):
     normalized = []
     for c in cols:
@@ -127,6 +125,57 @@ def _normalize_columns(cols):
         normalized.append(s)
     return normalized
 
+# New: Detect and ensure URL column functions (placed globally so can be reused)
+def detect_url_column(df):
+    """
+    Detect the most likely URL column name in df.
+    Priority:
+      1. exact 'url' or 'page'
+      2. any column containing 'url' or 'page'
+    Returns the original column name if found, else None.
+    """
+    if df is None or df.columns is None:
+        return None
+    for col in df.columns:
+        try:
+            cname = str(col).strip().lower()
+        except Exception:
+            cname = ""
+        if cname in ['url', 'page', 'page_url', 'page url']:
+            return col
+    # second pass: contains
+    for col in df.columns:
+        try:
+            cname = str(col).strip().lower()
+        except Exception:
+            cname = ""
+        if 'url' in cname or 'page' in cname:
+            return col
+    return None
+
+def ensure_url_column(df):
+    """
+    Ensure df has a column named 'url'. If a suitable column is detected,
+    copy it to df['url']. Otherwise create df['url'] filled with None.
+    Returns the same df (modified).
+    """
+    if df is None:
+        return df
+    try:
+        url_col = detect_url_column(df)
+        if url_col and url_col in df.columns:
+            df['url'] = df[url_col]
+        else:
+            # create explicit url column to avoid KeyError downstream
+            df['url'] = None
+    except Exception:
+        # on any unexpected error, ensure url exists to prevent crashes
+        df['url'] = None
+    return df
+
+# =================================================
+# BLOCK 5: EXCEL PARSE (Details + Chart)
+# =================================================
 def parse_excel_file(file_path):
     try:
         xls = pd.ExcelFile(file_path)
@@ -144,22 +193,9 @@ def parse_excel_file(file_path):
             if "Item name" in df_table.columns:
                 df_table['item_name'] = df_table['Item name']
             # --- Detect and unify URL column ---
-            def detect_url_column(df):
-                for col in df.columns:
-                    cname = col.strip().lower()
-                    # ترجیح می‌دهیم ستون‌هایی با نام دقیق‌تر اولویت داشته باشن
-                    if cname in ['url', 'page']:
-                        return col
-                    if 'url' in cname or 'page' in cname:
-                        return col
-                    return None
+            # replaced inline detect with global ensure_url_column
+            df_table = ensure_url_column(df_table)
 
-            url_col = detect_url_column(df_table)
-
-            if url_col and url_col in df_table.columns:
-                df_table['url'] = df_table[url_col]
-            else:
-                df_table['url'] = None
             details_frames.append(df_table)
         except Exception as e:
             print(f"[WARN] Failed to read Table sheet: {e}")
@@ -176,12 +212,20 @@ def parse_excel_file(file_path):
             # Metrics conversion
             for col in ["impressions","clicks","position"]:
                 if col in df_chart.columns:
-                    df_chart[col] = df_chart[col].replace(['None',''], 0)
+                    df_chart[col] = df_chart[col].replace(['None','', None], 0)
+                    # remove commas or other thousand separators if present
+                    df_chart[col] = df_chart[col].astype(str).str.replace(",","")
                     df_chart[col] = pd.to_numeric(df_chart[col], errors='coerce').fillna(0).astype(int)
             # Handle CTR percentage strings
             if "ctr" in df_chart.columns:
-                df_chart['ctr'] = df_chart['ctr'].replace(['None',''], 0)
-                df_chart["ctr"] = pd.to_numeric(df_chart["ctr"].astype(str).str.replace("%",""), errors="coerce").fillna(0)/100
+                df_chart['ctr'] = df_chart['ctr'].replace(['None','', None], 0)
+                df_chart["ctr"] = pd.to_numeric(df_chart["ctr"].astype(str).str.replace("%","").str.replace(",",""), errors="coerce").fillna(0)/100
+
+            # ensure page -> url mapping exists in metrics for fallback merging
+            # create 'url' column in metrics df from 'page' if possible
+            if 'page' in df_chart.columns:
+                df_chart['url'] = df_chart['page']
+            df_chart = ensure_url_column(df_chart)
 
             metrics_frames.append(df_chart)
         except Exception as e:
@@ -190,20 +234,46 @@ def parse_excel_file(file_path):
     details_df = pd.concat(details_frames, ignore_index=True) if details_frames else pd.DataFrame()
     metrics_df = pd.concat(metrics_frames, ignore_index=True) if metrics_frames else pd.DataFrame()
 
+    # ensure url exists on both frames before any merge
+    details_df = ensure_url_column(details_df)
+    metrics_df = ensure_url_column(metrics_df)
+
     # Merge safely on url + item_name
     if not details_df.empty and not metrics_df.empty:
         details_df['merge_key'] = details_df.apply(lambda r: f"{r.get('url','')}|{r.get('item_name','')}", axis=1)
-        metrics_df['merge_key'] = metrics_df.apply(lambda r: f"{r.get('page','')}|{r.get('item_name','')}", axis=1)
-        merged_df = details_df.merge(metrics_df.drop(columns=['page']), on='merge_key', how='left', suffixes=('','_metric'))
-        # fallback: fill missing metrics by url only
-        metrics_fallback = metrics_df.drop(columns=['page','item_name'])
-        for metric_col in ['impressions','clicks','ctr','position']:
-            if metric_col in metrics_fallback.columns:
-                merged_df[metric_col] = merged_df[metric_col].combine_first(
-                    merged_df['url'].map(metrics_fallback.set_index('url')[metric_col])
-                )
+        metrics_df['merge_key'] = metrics_df.apply(lambda r: f"{r.get('url','') if r.get('url',None) is not None else r.get('page','')}|{r.get('item_name','')}", axis=1)
+        merged_df = details_df.merge(metrics_df.drop(columns=['page']) if 'page' in metrics_df.columns else metrics_df, on='merge_key', how='left', suffixes=('','_metric'))
 
-        details_df = merged_df.drop(columns=['merge_key'])
+        # fallback: fill missing metrics by url only (safe per-row combine_first)
+        # prepare metrics_fallback ensuring 'url' exists
+        metrics_fallback = metrics_df.copy()
+        # ensure url column exists in fallback (it should due to ensure_url_column)
+        metrics_fallback = ensure_url_column(metrics_fallback)
+        # Drop item_name and page if present to avoid duplicate columns when mapping by url
+        drop_cols = [c for c in ['page','item_name'] if c in metrics_fallback.columns]
+        if drop_cols:
+            # keep 'url' then drop these
+            metrics_fallback = metrics_fallback.drop(columns=drop_cols)
+
+        # Create a mapping DataFrame indexed by 'url' for metric columns
+        metric_cols = [c for c in ['impressions','clicks','ctr','position'] if c in metrics_fallback.columns]
+        if metric_cols:
+            # set_index will now work because ensure_url_column ensures 'url' exists
+            try:
+                metrics_indexed = metrics_fallback.set_index('url')[metric_cols]
+                # combine per metric using combine_first: preserve existing merged values, fill nulls from metrics_indexed
+                for metric_col in metric_cols:
+                    if metric_col in merged_df.columns:
+                        merged_df[metric_col] = merged_df[metric_col].combine_first(
+                            merged_df['url'].map(metrics_indexed[metric_col])
+                        )
+                    else:
+                        # if metric_col not present in merged_df, create it from mapping
+                        merged_df[metric_col] = merged_df['url'].map(metrics_indexed[metric_col])
+            except Exception as e:
+                print(f"[WARN] metrics fallback by url failed: {e}")
+
+        details_df = merged_df.drop(columns=['merge_key'], errors='ignore')
 
     for col in ['url','item_name']:
         if col not in details_df.columns:
@@ -334,6 +404,7 @@ def main():
             continue
 
         if not details_df.empty:
+            # ensure url exists and drop rows without url
             details_df = details_df[details_df['url'].notna()]
             details_df['site'] = site
             details_df['date'] = date_val
