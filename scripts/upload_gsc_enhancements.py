@@ -143,10 +143,9 @@ def parse_excel_file(file_path):
             df_table = pd.read_excel(xls, sheet_name="Table")
             if "Item name" in df_table.columns:
                 df_table['item_name'] = df_table['Item name']
-            for col in ['URL', 'Page', 'page']:
-                if col in df_table.columns:
-                    df_table['url'] = df_table[col]
-                    break
+            url_cols = [c for c in df_table.columns if 'url' in c.lower() or 'page' in c.lower()]
+            if url_cols:
+                df_table['url'] = df_table[url_cols[0]]
             else:
                 df_table['url'] = None
             details_frames.append(df_table)
@@ -183,8 +182,16 @@ def parse_excel_file(file_path):
     if not details_df.empty and not metrics_df.empty:
         details_df['merge_key'] = details_df.apply(lambda r: f"{r.get('url','')}|{r.get('item_name','')}", axis=1)
         metrics_df['merge_key'] = metrics_df.apply(lambda r: f"{r.get('page','')}|{r.get('item_name','')}", axis=1)
-        details_df = details_df.merge(metrics_df.drop(columns=['page']), on='merge_key', how='left', suffixes=('','_metric'))
-        details_df.drop(columns=['merge_key'], inplace=True)
+        merged_df = details_df.merge(metrics_df.drop(columns=['page']), on='merge_key', how='left', suffixes=('','_metric'))
+        # fallback: fill missing metrics by url only
+        metrics_fallback = metrics_df.drop(columns=['page','item_name'])
+        for metric_col in ['impressions','clicks','ctr','position']:
+            if metric_col in metrics_fallback.columns:
+                merged_df[metric_col] = merged_df[metric_col].combine_first(
+                    merged_df['url'].map(metrics_fallback.set_index('url')[metric_col])
+                )
+
+        details_df = merged_df.drop(columns=['merge_key'])
 
     for col in ['url','item_name']:
         if col not in details_df.columns:
