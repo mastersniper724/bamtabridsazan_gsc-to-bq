@@ -9,7 +9,7 @@
 #          This workflow is for Other Search Types excluded by Web type (i.e. Search Type = Image, Video, News) data
 # ============================================================
 
-name: GSC Full Fetch (OtherSearchTypes) to BigQuery
+name: GSC Full Fetch (Other Search Types) to BigQuery
 
 on:
   workflow_dispatch:

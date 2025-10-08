@@ -8,7 +8,7 @@
 #          data boundary ending to 4 days back.
 # ============================================================
 
-name: GSC Full Fetch to BigQuery (7 Days)
+name: GSC Fullfetch (Web Type only) to BigQuery (7 Days)
 
 on:
   workflow_dispatch:
