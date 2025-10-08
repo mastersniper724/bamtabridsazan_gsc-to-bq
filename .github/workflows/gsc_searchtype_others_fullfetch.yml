@@ -1,6 +1,6 @@
 # ============================================================
 # Filename: gsc_searchtype_others_fullfetch.yml
-# Python : gsc_to_bq_searchtype_others__fullfetch.py
+# Python : gsc_to_bq_searchtype_others_fullfetch.py
 # Revision: Rev.01
 # Purpose: As Google's complete and full available data is just for official 4 days before
 #          fetch time, so to avoid void data and dates, the END_DATE should be fixed to 4 days ago and
@@ -98,7 +98,7 @@ jobs:
 
           CSV_TEST_FILE="gsc_fullfetch_test_rev02_${{ github.run_id }}.csv"
 
-          python src/scripts/gsc_to_bq_searchtype_others__fullfetch.py \
+          python src/scripts/gsc_to_bq_searchtype_others_fullfetch.py \
             $DEBUG_FLAG \
             --start-date "$START_DATE" \
             --end-date "$END_DATE" \
