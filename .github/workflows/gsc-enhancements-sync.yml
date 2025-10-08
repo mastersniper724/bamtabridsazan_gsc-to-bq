@@ -1,4 +1,9 @@
-name: GSC Enhancements Sync (R.2)
+# ============================================================
+# File: gsc-enhancements-sync
+# Revision: Rev.02
+# Purpose: Export GSC IU Structured Data Results' Excel files to BigQuery
+# ============================================================
+name: GSC Enhancements Sync
 
 on:
 #  schedule:
