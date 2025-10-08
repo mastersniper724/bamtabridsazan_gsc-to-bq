@@ -1,11 +1,11 @@
 # ============================================================
-# File: gsc_fullfetch.yml
+# File: gsc_searchtype_web_fullfetch.yml
+# Python : gsc_to_bq_searchtype_web_fullfetch.py (Rev.06)
 # Revision: Rev.03
-# Purpose: As real fetch time as per UTC will previous date, respect to Tehran time (+03:30)
-#          , and as Google complete and full available data is just for official 2 days before
-#          fetch time, so to avoid void data, the END_DATE should be fixed to 3 days ago and
+# Purpose: As Google's complete and full available data is just for official 4 days before
+#          fetch time, so to avoid void data and dates, the END_DATE should be fixed to 4 days ago and
 #          subsequently better to set 3 days refering to END_DATE, will become reay 6 Days back
-#          data boundary ending to 2 days back.
+#          data boundary ending to 4 days back.
 # ============================================================
 
 name: GSC Full Fetch to BigQuery (7 Days)
@@ -26,8 +26,8 @@ on:
         required: false
         default: 'false'
   schedule:
-    # GitHub Actions uses UTC → 22:30 UTC = 02:00 Tehran time
-    - cron: '30 22 * * *'
+    # GitHub Actions uses UTC → 01:00 UTC = 04:30 Tehran time
+    - cron: '00 01 * * *'
     
 
 jobs:
@@ -78,8 +78,8 @@ jobs:
         shell: bash
         run: |
           if [ "${{ github.event_name }}" = "schedule" ]; then
-            # Compute last 3-day period (week ending 2 days ago)
-            END_DATE=$(date -u -d "3 days ago" +"%Y-%m-%d")
+            # Compute last 3-day period (week ending 4 days ago)
+            END_DATE=$(date -u -d "4 days ago" +"%Y-%m-%d")
             START_DATE=$(date -u -d "$END_DATE -3 days" +"%Y-%m-%d")
             DEBUG_FLAG=""
           else
@@ -97,7 +97,7 @@ jobs:
 
           CSV_TEST_FILE="gsc_fullfetch_test_rev02_${{ github.run_id }}.csv"
 
-          python gsc_to_bq_rev6_fullfetch.py \
+          python gsc_to_bq_searchtype_web_fullfetch.py \
             $DEBUG_FLAG \
             --start-date "$START_DATE" \
             --end-date "$END_DATE" \

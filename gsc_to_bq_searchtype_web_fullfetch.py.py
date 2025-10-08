@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 # ============================================================
-# File: gsc_to_bq_rev6_fullfetch.py
+# File: gsc_to_bq_fullfetch.py
 # Revision: Rev6.6.14 — read existing_keys once; Duplicate-check enforced for Blocks B & C; logs improved
 # Purpose: Full fetch from GSC -> BigQuery with duplicate prevention and sitewide total batch
 # ============================================================

@@ -1,4 +1,15 @@
-name: GSC Full Fetch (OtherSearchTypes) to BigQuery (rev1)
+# ============================================================
+# Filename: gsc_searchtype_others_fullfetch.yml
+# Python : gsc_to_bq_searchtype_others__fullfetch.py
+# Revision: Rev.01
+# Purpose: As Google's complete and full available data is just for official 4 days before
+#          fetch time, so to avoid void data and dates, the END_DATE should be fixed to 4 days ago and
+#          subsequently better to set 3 days refering to END_DATE, will become reay 6 Days back
+#          data boundary ending to 4 days back.
+#          This workflow is for Other Search Types excluded by Web type (i.e. Search Type = Image, Video, News) data
+# ============================================================
+
+name: GSC Full Fetch (OtherSearchTypes) to BigQuery
 
 on:
   workflow_dispatch:
@@ -15,14 +26,15 @@ on:
         description: 'Enable debug mode'
         required: false
         default: 'false'
-#  schedule:
-    # GitHub Actions uses UTC → 22:30 UTC = 02:00 Tehran time
-#    - cron: '30 22 * * *'
+  schedule:
+    # GitHub Actions uses UTC → 01:00 UTC = 04:30 Tehran time
+    - cron: '00 01 * * *'
     
 
 jobs:
-  fullfetch-gsc-to-bq:
+  sync-enhancements:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -32,10 +44,20 @@ jobs:
         with:
           python-version: "3.11"
 
+      # ✅ مرحله‌ی کش کردن پکیج‌های pip
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      # ✅ نصب ماژول‌ها از فایل requirements.txt
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install google-auth google-auth-oauthlib google-auth-httplib2 google-api-python-client google-cloud-bigquery google-cloud-bigquery-storage tqdm pandas pyarrow db-dtypes pandas_gbq
+          pip install -r requirements.txt
 
       - name: Write GCP credentials file
         run: |
@@ -57,9 +79,9 @@ jobs:
         shell: bash
         run: |
           if [ "${{ github.event_name }}" = "schedule" ]; then
-            # Compute last 7-day period (week ending yesterday)
-            END_DATE=$(date -u -d "yesterday" +"%Y-%m-%d")
-            START_DATE=$(date -u -d "$END_DATE -6 days" +"%Y-%m-%d")
+            # Compute last 3-day period (week ending 4 days ago)
+            END_DATE=$(date -u -d "4 days ago" +"%Y-%m-%d")
+            START_DATE=$(date -u -d "$END_DATE -3 days" +"%Y-%m-%d")
             DEBUG_FLAG=""
           else
             # Manual run (workflow_dispatch)
@@ -76,7 +98,7 @@ jobs:
 
           CSV_TEST_FILE="gsc_fullfetch_test_rev02_${{ github.run_id }}.csv"
 
-          python gsc_to_bq_othersearchtypes_fullfetch.py \
+          python gsc_to_bq_searchtype_others__fullfetch.py \
             $DEBUG_FLAG \
             --start-date "$START_DATE" \
             --end-date "$END_DATE" \

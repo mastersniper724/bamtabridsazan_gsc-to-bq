@@ -1,8 +1,8 @@
 name: GSC to BigQuery (Incremental Daily)
 
 on:
-  schedule:
-    - cron: "30 22 * * *"  # 2:00 AM Tehran time
+#  schedule:
+#    - cron: "30 22 * * *"  # 2:00 AM Tehran time
   workflow_dispatch:
 
 jobs:
