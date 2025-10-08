@@ -81,6 +81,6 @@ jobs:
 
           echo "📅 Fetching Search Appearance data for $TARGET_DATE"
 
-          python gsc_to_bq_searchappearance_fullfetch.py \
+          python scripts/gsc_to_bq_searchappearance_fullfetch.py \
             --start-date "$TARGET_DATE" \
             --end-date "$TARGET_DATE"

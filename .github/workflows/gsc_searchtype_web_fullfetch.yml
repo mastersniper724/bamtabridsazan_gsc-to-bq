@@ -97,7 +97,7 @@ jobs:
 
           CSV_TEST_FILE="gsc_fullfetch_test_rev02_${{ github.run_id }}.csv"
 
-          python gsc_to_bq_searchtype_web_fullfetch.py \
+          python scripts/gsc_to_bq_searchtype_web_fullfetch.py \
             $DEBUG_FLAG \
             --start-date "$START_DATE" \
             --end-date "$END_DATE" \

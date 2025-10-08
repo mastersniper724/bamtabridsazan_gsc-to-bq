@@ -31,7 +31,7 @@ PROJECT_ID = "bamtabridsazan"
 DATASET_ID = "seo_reports"
 TABLE_ID = "bamtabridsazan__gsc__raw_enhancements"
 MAPPING_TABLE = f"{PROJECT_ID}.{DATASET_ID}.bamtabridsazan__gsc__searchappearance_enhancement_mapping"
-GITHUB_LOCAL_PATH_DEFAULT = "gsc_enhancements"
+GITHUB_LOCAL_PATH_DEFAULT = "data/raw/search_appearance/gsc_enhancements"
 
 FINAL_COLUMNS = [
     "site",
