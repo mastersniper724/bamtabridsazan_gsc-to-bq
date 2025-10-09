@@ -19,11 +19,19 @@ from datetime import datetime
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from google.cloud import bigquery
+from utils.gsc_country_utils import load_country_map, map_country_column
 
-# ---------- CONFIG ----------
+# ---------- MAIN CONFIG ----------
 SITE_URL = "sc-domain:bamtabridsazan.com"
 BQ_PROJECT = "bamtabridsazan"
 BQ_DATASET = "seo_reports"
+# ---------- COUNTRY MAPPING ----------
+COUNTRY_MAP = load_country_map(
+    project=BQ_PROJECT,
+    dataset=BQ_DATASET,
+    table="gsc_dim_country"
+)
+# ---------- SPCEICAL CONFIG ----------
 BQ_TABLE = "bamtabridsazan__gsc__raw_domain_data_othersearchtype_fullfetch"
 ROW_LIMIT = 25000
 RETRY_DELAY = 60  # seconds
@@ -561,6 +569,11 @@ def main():
     df_site, inserted_site = fetch_sitewide_batch(START_DATE, END_DATE, existing_keys)
 
     total_all_inserted = inserted_main + inserted_noindex + inserted_b4 + inserted_site
+
+    # ---------- MAP COUNTRY COLUMN ----------
+    for df in [df_new, df_noindex, df_batch4, df_site]:
+        if df is not None and not df.empty:
+            df = map_country_column(df, COUNTRY_MAP)
 
     # Compose CSV output if requested
     if CSV_TEST_FILE:
