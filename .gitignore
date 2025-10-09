@@ -1,7 +1,22 @@
-.DS_Store
 *.json
 bamtabridsazan-gsc-to-bq.json
-venv/
-__pycache__/
 gcp-key-base64.txt
+
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual Envs
 .venv/
+env/
+venv/
+
+# Data / cache / logs
+*.zip
+*.log
+
+# System
+.DS_Store
