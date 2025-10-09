@@ -2,8 +2,10 @@
 # -*- coding: utf-8 -*-
 # ============================================================
 # File: gsc_to_bq_othersearchtypes_fullfetch.py
-# Revision: Rev.4 (patched)
+# Revision: Rev.5
 # Purpose: Full fetch from GSC -> for Image / Video / News Search Types
+# Notes: Fixes for pagination loop, ensures SearchType=image is processed,
+#        and updates BigQuery table schema to include SearchType if missing.
 # ============================================================
 
 import os
@@ -26,10 +28,11 @@ BQ_TABLE = "bamtabridsazan__gsc__raw_domain_data_othersearchtype_fullfetch"
 ROW_LIMIT = 25000
 RETRY_DELAY = 60  # seconds
 SERVICE_ACCOUNT_FILE = os.environ.get("SERVICE_ACCOUNT_FILE", "gcp-key.json")
+# ensure image is present first to avoid accidental omission
 SEARCH_TYPES = ['image', 'video', 'news']
 
 # ---------- ARGUMENTS ----------
-parser = argparse.ArgumentParser(description="GSC to BigQuery Full Fetch (Rev4 patched)")
+parser = argparse.ArgumentParser(description="GSC to BigQuery Full Fetch (Rev5)")
 parser.add_argument("--start-date", required=True, help="Start date YYYY-MM-DD")
 parser.add_argument("--end-date", required=True, help="End date YYYY-MM-DD")
 parser.add_argument("--debug", action="store_true", help="Debug: skip BQ insert (still creates CSV if requested)")
@@ -63,11 +66,35 @@ def get_gsc_service():
 bq_client = get_bq_client()
 table_ref = bq_client.dataset(BQ_DATASET).table(BQ_TABLE)
 
-# ---------- ENSURE TABLE EXISTS ----------
-def ensure_table():
+# ---------- ENSURE TABLE EXISTS & SCHEMA UPDATES ----------
+def ensure_table_and_schema():
+    """
+    Ensure table exists. If exists but missing 'SearchType' column, add it.
+    This avoids the 'Provided Schema does not match Table ... Cannot add fields (field: SearchType)' error.
+    """
     try:
-        bq_client.get_table(table_ref)
+        table = bq_client.get_table(table_ref)
         print(f"[INFO] Table {BQ_TABLE} exists.", flush=True)
+        # check schema for SearchType
+        field_names = [f.name for f in table.schema]
+        if "SearchType" not in field_names:
+            print(f"[INFO] Field 'SearchType' missing in table schema. Attempting to add it...", flush=True)
+            new_schema = list(table.schema)
+            new_schema.append(bigquery.SchemaField("SearchType", "STRING"))
+            table.schema = new_schema
+            try:
+                bq_client.update_table(table, ["schema"])
+                print(f"[INFO] Added 'SearchType' column to {BQ_TABLE}.", flush=True)
+            except Exception as e:
+                # fallback: try ALTER TABLE via query (may require permissions)
+                try:
+                    alter_q = f"ALTER TABLE `{BQ_PROJECT}.{BQ_DATASET}.{BQ_TABLE}` ADD COLUMN SearchType STRING"
+                    query_job = bq_client.query(alter_q)
+                    query_job.result()
+                    print(f"[INFO] Added 'SearchType' column via ALTER TABLE.", flush=True)
+                except Exception as e2:
+                    print(f"[WARN] Could not add 'SearchType' column automatically: {e} / {e2}", flush=True)
+                    print("[WARN] Please add column 'SearchType' (STRING) manually to the table and re-run.", flush=True)
     except Exception:
         print(f"[INFO] Table {BQ_TABLE} not found. Creating...", flush=True)
         schema = [
@@ -86,7 +113,7 @@ def ensure_table():
         table = bigquery.Table(table_ref, schema=schema)
         table.clustering_fields = ["Query", "Page"]
         bq_client.create_table(table)
-        print(f"[INFO] Table {BQ_TABLE} created.", flush=True)
+        print(f"[INFO] Table {BQ_TABLE} created with SearchType field.", flush=True)
 
 # ---------- UNIQUE KEY ----------
 def generate_unique_key(row):
@@ -137,19 +164,6 @@ def upload_to_bq(df):
         return len(df)
     job_config = bigquery.LoadJobConfig(
         write_disposition="WRITE_APPEND",
-        schema=[
-            bigquery.SchemaField("Date", "DATE"),
-            bigquery.SchemaField("Query", "STRING"),
-            bigquery.SchemaField("Page", "STRING"),
-            bigquery.SchemaField("Country", "STRING"),
-            bigquery.SchemaField("Device", "STRING"),
-            bigquery.SchemaField("Clicks", "INTEGER"),
-            bigquery.SchemaField("Impressions", "INTEGER"),
-            bigquery.SchemaField("CTR", "FLOAT"),
-            bigquery.SchemaField("Position", "FLOAT"),
-            bigquery.SchemaField("SearchType", "STRING"),
-            bigquery.SchemaField("unique_key", "STRING"),
-        ],
     )
     try:
         job = bq_client.load_table_from_dataframe(df, table_ref, job_config=job_config)
@@ -163,8 +177,8 @@ def upload_to_bq(df):
 # ---------- FETCH GSC DATA ----------
 def fetch_gsc_data(start_date, end_date, existing_keys):
     """
-    Main batches (keeps original DIMENSION_BATCHES from 6.6.11).
-    existing_keys: set passed from main() to avoid re-fetching keys repeatedly.
+    Main batches (keeps original DIMENSION_BATCHES).
+    Pagination is handled per (dims, searchType) with start_row reset for each pair.
     Returns (df_all_new, total_inserted)
     """
     service = get_gsc_service()
@@ -182,39 +196,42 @@ def fetch_gsc_data(start_date, end_date, existing_keys):
     total_new_candidates_overall = 0
 
     for i, dims in enumerate(DIMENSION_BATCHES, start=1):
-        start_row = 0
-        batch_index = 1
         fetched_total_for_batch = 0
         new_candidates_for_batch = 0
-        while True:
-            print(f"[INFO] Batch {i}, dims {dims}: fetching data (startRow={start_row})...", flush=True)
-            # پایه request بدون searchType
-            request = {
-                "startDate": start_date,
-                "endDate": end_date,
-                "dimensions": dims,
-                "rowLimit": ROW_LIMIT,
-                "startRow": start_row,
-            }
 
-            # حلقه روی searchType ها
-            for stype in SEARCH_TYPES:
-                request['searchType'] = stype
+        for stype in SEARCH_TYPES:
+            # reset pagination per (dims, stype)
+            start_row = 0
+            page_index = 0
+            print(f"[INFO] Batch {i}, dims={dims}, starting fetch for SearchType={stype}", flush=True)
+
+            while True:
+                request = {
+                    "startDate": start_date,
+                    "endDate": end_date,
+                    "dimensions": dims,
+                    "rowLimit": ROW_LIMIT,
+                    "startRow": start_row,
+                    "searchType": stype,
+                }
+
                 try:
                     resp = service.searchanalytics().query(siteUrl=SITE_URL, body=request).execute()
                 except Exception as e:
-                    print(f"[ERROR] Timeout or error: {e}, retrying in {RETRY_DELAY} sec...", flush=True)
+                    print(f"[ERROR] Timeout or GSC error for dims={dims}, stype={stype}: {e}. Retrying in {RETRY_DELAY}s...", flush=True)
                     time.sleep(RETRY_DELAY)
                     continue
 
                 rows = resp.get("rows", [])
                 if not rows:
-                    print(f"[INFO] Batch {i}, searchType={stype} no more rows.", flush=True)
-                    continue
+                    print(f"[INFO] No rows returned for dims={dims}, stype={stype}, startRow={start_row}", flush=True)
+                    break  # no more rows for this (dims,stype)
 
-                fetched_total_for_batch += len(rows)
+                fetched_count = len(rows)
+                fetched_total_for_batch += fetched_count
+                page_index += 1
+
                 batch_new = []
-
                 for r in rows:
                     keys = r.get("keys", [])
                     date = keys[0] if len(keys) > 0 else None
@@ -250,23 +267,17 @@ def fetch_gsc_data(start_date, end_date, existing_keys):
                     total_inserted += inserted
                     all_new_rows.extend(batch_new)
 
-                batch_index += 1
-                if len(rows) < ROW_LIMIT:
-                    # this searchType produced less than a full page -> no more rows for this searchType and dims
-                    continue
-                # if rows == ROW_LIMIT we increase start_row to paginate for next stype iteration
-                start_row += len(rows)
-
-            # Decide whether to break the outer while:
-            # If none of the searchTypes returned a full ROW_LIMIT page, we can break
-            # but to keep behavior conservative we check last fetched_total_for_batch
-            if fetched_total_for_batch == 0:
-                break
-            # To avoid infinite loop when API yields rows repeatedly, break when last request produced < ROW_LIMIT across all stypes
-            # (we already handled per-stype, so to be safe, break here if start_row exceeded a single page)
-            # For simplicity, break if start_row exceeds an arbitrary large number? Keep previous behavior:
-            if fetched_total_for_batch < ROW_LIMIT:
-                break
+                # pagination control:
+                # if rows < ROW_LIMIT -> no further pages for this (dims, stype)
+                if fetched_count < ROW_LIMIT:
+                    print(f"[INFO] End of pages for dims={dims}, stype={stype} (fetched_count={fetched_count} < ROW_LIMIT)", flush=True)
+                    break
+                # else increment start_row and continue
+                start_row += fetched_count
+                # safety guard to avoid runaway loops: break if too many pages (e.g., >1000)
+                if page_index > 10000:
+                    print(f"[WARN] Too many pages for dims={dims}, stype={stype}. Breaking to avoid infinite loop.", flush=True)
+                    break
 
         print(f"[INFO] Batch {i} summary: fetched_total={fetched_total_for_batch}, new_candidates={new_candidates_for_batch}", flush=True)
         total_fetched_overall += fetched_total_for_batch
@@ -276,45 +287,45 @@ def fetch_gsc_data(start_date, end_date, existing_keys):
     print(f"[INFO] fetch_gsc_data summary: fetched_overall={total_fetched_overall}, new_candidates_overall={total_new_candidates_overall}, inserted_overall={total_inserted}", flush=True)
     return df_all_new, total_inserted
 
-# ---------- NEW: Isolated No-Index fetch (replaces old Batch7 behavior) ----------
+# ---------- Isolated No-Index fetch (replaces old Batch7 behavior) ----------
 def fetch_noindex_batch(start_date, end_date, existing_keys):
     """
     Fetch rows where 'page' is NULL/empty in dimensions ['date','page'].
-    These represent the No-Index / unknown-page records we want to label as __NO_INDEX__.
     Returns (df_noindex, inserted_count)
     """
     service = get_gsc_service()
-    start_row = 0
     noindex_rows = []
+    inserted_total = 0
     fetched_total = 0
     new_candidates = 0
-    inserted_total = 0
-    while True:
-        request = {
-            "startDate": start_date,
-            "endDate": end_date,
-            "dimensions": ["date", "page"],
-            "rowLimit": ROW_LIMIT,
-            "startRow": start_row,
-        }
-        # حلقه روی searchType ها
-        for stype in SEARCH_TYPES:
-            request['searchType'] = stype
+
+    for stype in SEARCH_TYPES:
+        start_row = 0
+        while True:
+            print(f"[INFO] No-Index fetch for stype={stype}, startRow={start_row}", flush=True)
+            request = {
+                "startDate": start_date,
+                "endDate": end_date,
+                "dimensions": ["date", "page"],
+                "rowLimit": ROW_LIMIT,
+                "startRow": start_row,
+                "searchType": stype,
+            }
             try:
                 resp = service.searchanalytics().query(siteUrl=SITE_URL, body=request).execute()
             except Exception as e:
-                print(f"[ERROR] No-Index batch error: {e}, retrying in {RETRY_DELAY} sec...", flush=True)
+                print(f"[ERROR] No-Index batch error for stype={stype}: {e}, retrying in {RETRY_DELAY} sec...", flush=True)
                 time.sleep(RETRY_DELAY)
                 continue
 
             rows = resp.get("rows", [])
             if not rows:
-                continue
+                break
 
             fetched_total += len(rows)
             for r in rows:
                 keys = r.get("keys", [])
-                # keys should be [date, page]
+                # expect [date, page]
                 if len(keys) == 2:
                     page_val = keys[1]
                     if (page_val is None) or (str(page_val).strip() == ""):
@@ -337,16 +348,8 @@ def fetch_noindex_batch(start_date, end_date, existing_keys):
                             new_candidates += 1
 
             if len(rows) < ROW_LIMIT:
-                continue
+                break
             start_row += len(rows)
-
-        # break condition: if no rows found across stypes in this start_row, exit
-        # (we track fetched_total; if it didn't change in an iteration we'd need a better exit — keep conservative)
-        # Simple exit: break if fetched_total == 0 (no rows at all across stypes)
-        if fetched_total == 0:
-            break
-        # For safety, exit after one full pass (behavior can be tuned later)
-        break
 
     df_noindex = pd.DataFrame(noindex_rows) if noindex_rows else pd.DataFrame([])
     if not df_noindex.empty:
@@ -358,35 +361,32 @@ def fetch_noindex_batch(start_date, end_date, existing_keys):
 
     return df_noindex, inserted_total
 
-# ---------- A: FETCH SITEWIDE BATCH (ISOLATED) ----------
+# ---------- FETCH SITEWIDE BATCH (ISOLATED) ----------
 def fetch_sitewide_batch(start_date, end_date, existing_keys):
     """
     Sitewide: dimensions = ['date']
-    Inserts __SITE_TOTAL__ rows and placeholder dates for missing days.
-    existing_keys is passed in to prevent duplicates.
+    Inserts __SITE_TOTAL__ rows per searchType and placeholder dates for missing days.
     Returns (df_all_new_rows, inserted_count)
     """
     print("[INFO] Running sitewide batch ['date']...", flush=True)
     service = get_gsc_service()
     all_new_rows = []
     total_new_count = 0
-
-    # ---------- Step 1: fetch actual GSC rows for ['date'] ----------
-    start_row = 0
-    batch_index = 1
     fetched_total = 0
     new_candidates = 0
+
     for stype in SEARCH_TYPES:
         start_row = 0
         while True:
+            print(f"[INFO] Sitewide fetch for stype={stype}, startRow={start_row}", flush=True)
             request = {
                 "startDate": start_date,
                 "endDate": end_date,
                 "dimensions": ["date"],
                 "rowLimit": ROW_LIMIT,
                 "startRow": start_row,
+                "searchType": stype,
             }
-            request['searchType'] = stype
             try:
                 resp = service.searchanalytics().query(siteUrl=SITE_URL, body=request).execute()
             except Exception as e:
@@ -430,16 +430,17 @@ def fetch_sitewide_batch(start_date, end_date, existing_keys):
                 total_new_count += inserted
                 all_new_rows.extend(batch_new)
 
-            batch_index += 1
             if len(rows) < ROW_LIMIT:
                 break
             start_row += len(rows)
 
-    # ---------- Step 2: add placeholder rows for missing dates ----------
+    # Step 2: placeholders for missing dates (for each searchType)
     date_range = pd.date_range(start=start_date, end=end_date)
     for dt in date_range:
         date_str = dt.strftime("%Y-%m-%d")
-        if not any(str(row.get("Date"))[:10] == date_str for row in all_new_rows):
+        # check if any row for that date exists in all_new_rows for any stype
+        exists_for_date = any(str(row.get("Date"))[:10] == date_str for row in all_new_rows)
+        if not exists_for_date:
             for stype in SEARCH_TYPES:
                 placeholder_row = {
                     "Date": date_str,
@@ -460,7 +461,6 @@ def fetch_sitewide_batch(start_date, end_date, existing_keys):
                     all_new_rows.append(placeholder_row)
                     print(f"[INFO] Sitewide batch: adding placeholder for missing date {date_str} (stype={stype})", flush=True)
 
-    # Insert placeholders (with null metrics) if any
     placeholders_only = [row for row in all_new_rows if row.get("Clicks") is None]
     if placeholders_only:
         df_placeholders = pd.DataFrame(placeholders_only)
@@ -472,7 +472,7 @@ def fetch_sitewide_batch(start_date, end_date, existing_keys):
 
 # ---------- MAIN ----------
 def main():
-    ensure_table()
+    ensure_table_and_schema()
     print(f"[INFO] Fetching data from {START_DATE} to {END_DATE}", flush=True)
 
     # ---------- Check existing keys (once, date-limited) ----------
@@ -491,22 +491,22 @@ def main():
     print("[INFO] Fetching Batch 4 (Date + Page, excluding NULL pages)...", flush=True)
     try:
         service = get_gsc_service()
-        start_row = 0
         all_rows = []
-
         fetched_b4 = 0
         new_b4 = 0
+
         for stype in SEARCH_TYPES:
             start_row = 0
             while True:
+                print(f"[INFO] Batch4 fetch for stype={stype}, startRow={start_row}", flush=True)
                 request = {
                     "startDate": START_DATE,
                     "endDate": END_DATE,
                     "dimensions": ["date", "page"],
                     "rowLimit": ROW_LIMIT,
                     "startRow": start_row,
+                    "searchType": stype,
                 }
-                request['searchType'] = stype
                 resp = service.searchanalytics().query(siteUrl=SITE_URL, body=request).execute()
                 rows = resp.get("rows", [])
                 if not rows:
@@ -515,7 +515,7 @@ def main():
                 fetched_b4 += len(rows)
                 for r in rows:
                     keys = r.get("keys", [])
-                    if len(keys) == 2 and keys[1]:  # فقط صفحات non-null
+                    if len(keys) == 2 and keys[1]:  # only non-null pages
                         row = {
                             "Date": keys[0],
                             "Query": "__PAGE_TOTAL__",
@@ -547,6 +547,7 @@ def main():
                 inserted_b4 = upload_to_bq(df_batch4)
                 print(f"[INFO] Batch 4: Inserted {inserted_b4} new rows to BigQuery.", flush=True)
         else:
+            df_batch4 = pd.DataFrame([])
             print("[INFO] Batch 4: No non-null page rows found.", flush=True)
 
         print(f"[INFO] Batch 4 summary: fetched_total={fetched_b4}, new_candidates={new_b4}, inserted={inserted_b4}", flush=True)
