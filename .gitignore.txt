@@ -4,3 +4,4 @@ venv/
 __pycache__/
 .DS_Store
 gcp-key-base64.txt
+.venv

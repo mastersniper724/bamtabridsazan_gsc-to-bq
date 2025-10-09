@@ -4,3 +4,4 @@ bamtabridsazan-gsc-to-bq.json
 venv/
 __pycache__/
 gcp-key-base64.txt
+.venv
