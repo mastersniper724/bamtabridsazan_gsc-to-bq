@@ -571,9 +571,19 @@ def main():
     total_all_inserted = inserted_main + inserted_noindex + inserted_b4 + inserted_site
 
     # ---------- MAP COUNTRY COLUMN ----------
-    for df in [df_new, df_noindex, df_batch4, df_site]:
-        if df is not None and not df.empty:
-            df = map_country_column(df, COUNTRY_MAP)
+    COUNTRY_MAP = load_country_map(bq_client)
+    if df_new is not None and not df_new.empty:
+        df_new = map_country_column(df_new, COUNTRY_MAP)
+
+    if df_noindex is not None and not df_noindex.empty:
+        df_noindex = map_country_column(df_noindex, COUNTRY_MAP)
+
+    if df_batch4 is not None and not df_batch4.empty:
+        df_batch4 = map_country_column(df_batch4, COUNTRY_MAP)
+
+    if df_site is not None and not df_site.empty:
+        df_site = map_country_column(df_site, COUNTRY_MAP)
+
 
     # Compose CSV output if requested
     if CSV_TEST_FILE:
