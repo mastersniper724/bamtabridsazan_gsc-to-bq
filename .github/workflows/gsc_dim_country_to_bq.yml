@@ -1,0 +1,79 @@
+# ============================================================
+# File: gsc_dim_country_to_bq.yml
+# Python : generate_gsc_dim_country.py
+# Revision: Rev.01
+# Purpose: Generate GSC country dimension table directly in BigQuery
+#          No local CSV output, fully production-ready
+# ============================================================
+
+name: Generate GSC Dim Country Table in BigQuery
+
+on:
+  workflow_dispatch:   # قابلیت اجرای دستی
+    inputs:
+      debug:
+        description: 'Enable debug mode'
+        required: false
+        default: 'false'
+#  schedule:            # اجرای خودکار روزانه
+#    - cron: '00 02 * * *'  # 02:00 UTC ~ 05:30 تهران
+
+jobs:
+  generate-dim-country:
+    runs-on: ubuntu-latest
+
+    steps:
+      # ۱. Checkout repository
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ۲. Setup Python
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # ۳. Cache pip dependencies
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      # ۴. Install dependencies
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # ۵. Write GCP credentials file
+      - name: Write GCP credentials file
+        run: |
+          if [ -n "${{ secrets.BAMTABRIDSAZAN_GCP_SA_KEY_BASE64 }}" ]; then
+            printf "%s" "${{ secrets.BAMTABRIDSAZAN_GCP_SA_KEY_BASE64 }}" | base64 --decode > gcp-key.json
+          elif [ -n "${{ secrets.BAMTABRIDSAZAN_GCP_SA_KEY }}" ]; then
+            printf "%s" "${{ secrets.BAMTABRIDSAZAN_GCP_SA_KEY }}" > gcp-key.json
+          else
+            echo "❌ ERROR: Missing GCP credentials secret."
+            exit 1
+          fi
+
+      # ۶. Validate credentials
+      - name: Validate gcp-key.json
+        run: python -c "import json; json.load(open('gcp-key.json'))"
+
+      # ۷. Run Python script
+      - name: Run generate_gsc_dim_country.py
+        env:
+          GOOGLE_APPLICATION_CREDENTIALS: gcp-key.json
+        shell: bash
+        run: |
+          DEBUG_FLAG=""
+          if [ "${{ github.event.inputs.debug }}" = "true" ]; then
+            DEBUG_FLAG="--debug"
+          fi
+
+          echo "📌 Running generate_gsc_dim_country.py"
+          python src/scripts/generate_gsc_dim_country.py $DEBUG_FLAG
