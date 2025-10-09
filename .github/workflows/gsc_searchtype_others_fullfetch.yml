@@ -29,7 +29,10 @@ on:
 #  schedule:
     # GitHub Actions uses UTC → 01:00 UTC = 04:30 Tehran time
 #    - cron: '00 01 * * *'
-    
+
+concurrency:
+  group: gsc-searchtype-others
+  cancel-in-progress: false    
 
 jobs:
   sync-enhancements:
