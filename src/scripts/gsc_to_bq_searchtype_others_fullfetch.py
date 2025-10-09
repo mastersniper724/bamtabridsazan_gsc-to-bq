@@ -69,7 +69,7 @@ table_ref = bq_client.dataset(BQ_DATASET).table(BQ_TABLE)
 
 # ---------- COUNTRY MAPPING ----------
 COUNTRY_MAP = load_country_map(
-    bq_client,
+    project="bamtabridsazan",
     dataset="seo_reports",
     table="gsc_dim_country"
 )
