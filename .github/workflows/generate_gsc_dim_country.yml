@@ -5,6 +5,9 @@ on:
   schedule:
     - cron: "0 2 * * *"   # اجرای خودکار روزانه ساعت 2 صبح (UTC)
 
+env:
+  GSC_DIM_COUNTRY_DIR: "/data/raw/gsc"
+
 jobs:
   build:
     runs-on: ubuntu-latest
