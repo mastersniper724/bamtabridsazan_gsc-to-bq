@@ -28,7 +28,7 @@ jobs:
 
       # ۴. Run the Python script
       - name: Run generate_gsc_dim_country.py
-        run: python scripts/gsc/generate_gsc_dim_country.py
+        run: python scripts/generate_gsc_dim_country.py
 
       # ۵. (اختیاری) Commit & push CSV به repo
       - name: Commit and push CSV
