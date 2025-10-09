@@ -25,13 +25,6 @@ from utils.gsc_country_utils import load_country_map, map_country_column
 SITE_URL = "sc-domain:bamtabridsazan.com"
 BQ_PROJECT = "bamtabridsazan"
 BQ_DATASET = "seo_reports"
-# ---------- COUNTRY MAPPING ----------
-COUNTRY_MAP = load_country_map(
-    project=BQ_PROJECT,
-    dataset=BQ_DATASET,
-    table="gsc_dim_country"
-)
-# ---------- SPCEICAL CONFIG ----------
 BQ_TABLE = "bamtabridsazan__gsc__raw_domain_data_othersearchtype_fullfetch"
 ROW_LIMIT = 25000
 RETRY_DELAY = 60  # seconds
@@ -73,6 +66,13 @@ def get_gsc_service():
 
 bq_client = get_bq_client()
 table_ref = bq_client.dataset(BQ_DATASET).table(BQ_TABLE)
+
+# ---------- COUNTRY MAPPING ----------
+COUNTRY_MAP = load_country_map(
+    bq_client,
+    dataset="seo_reports",
+    table="gsc_dim_country"
+)
 
 # ---------- ENSURE TABLE EXISTS & SCHEMA UPDATES ----------
 def ensure_table_and_schema():
