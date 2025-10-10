@@ -59,6 +59,7 @@ def robust_map_country_column(
     Robust mapping for GSC country values:
       - Handles both Alpha-2 and Alpha-3 codes directly from the map
       - Handles 'zzz', 'zz', or 'unknown' as 'Unknown Region'
+      - Handles 'XKK' as Kosovo
       - Non-mapped values return None
     """
     if df is None or df.empty or country_map is None:
@@ -70,6 +71,8 @@ def robust_map_country_column(
         s = str(val).strip().upper()
         if s in ("", "ZZ", "ZZZ", "UNKNOWN"):
             return "Unknown Region"
+        if s == "XKK":
+            return "Kosovo"
         return country_map.get(s, None)
 
     df[new_col] = df[country_col].apply(map_one)
