@@ -73,8 +73,11 @@ query = """
     SELECT country_code_alpha3 AS country_code, country_name
     FROM `bamtabridsazan.seo_reports.gsc_dim_country`
 """
-COUNTRY_MAP = dict(client.query(query).to_dataframe().apply(lambda r: (r['country_code'].upper(), r['country_name']), axis=1))
+df_country = client.query(query).to_dataframe()
+df_country["country_code"] = df_country["country_code"].str.upper()
+COUNTRY_MAP = dict(zip(df_country["country_code"], df_country["country_name"]))
 
+print(f"[DEBUG] Loaded {len(COUNTRY_MAP)} country mappings. Sample keys: {list(COUNTRY_MAP.keys())[:10]}", flush=True)
 
 # ---------- ENSURE TABLE EXISTS & SCHEMA UPDATES ----------
 def ensure_table_and_schema():
