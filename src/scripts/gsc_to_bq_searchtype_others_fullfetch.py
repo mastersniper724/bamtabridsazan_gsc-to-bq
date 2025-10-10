@@ -284,12 +284,6 @@ def fetch_gsc_data(start_date, end_date, existing_keys):
                             # quick samples to inspect incoming codes
                             sample_vals = pd.Series(df_batch[country_col].astype(str)).dropna().unique()[:20]
 
-                            # show that COUNTRY_MAP has been loaded and sample keys
-                            try:
-                                print(f"[DEBUG] COUNTRY_MAP size: {len(COUNTRY_MAP)}; sample keys: {list(COUNTRY_MAP)[:20]}", flush=True)
-                            except Exception as e:
-                                print(f"[DEBUG] COUNTRY_MAP not available or error: {e}", flush=True)
-
                             # apply robust mapping (uses utils.robust_map_country_column)
                             df_batch = robust_map_country_column(df_batch, country_col=country_col, country_map=COUNTRY_MAP, new_col="Country")
                             # now show how many mapped / unmapped
