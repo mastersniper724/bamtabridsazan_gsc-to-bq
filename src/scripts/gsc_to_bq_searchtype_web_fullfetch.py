@@ -17,6 +17,7 @@ from datetime import datetime
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from google.cloud import bigquery
+from utils.gsc_country_utils import load_country_map, robust_map_country_column
 
 # ---------- CONFIG ----------
 SITE_URL = "sc-domain:bamtabridsazan.com"
@@ -58,6 +59,13 @@ def get_gsc_service():
 
 bq_client = get_bq_client()
 table_ref = bq_client.dataset(BQ_DATASET).table(BQ_TABLE)
+
+# ---------- COUNTRY MAPPING ----------
+COUNTRY_MAP = load_country_map(
+    project="bamtabridsazan",
+    dataset="seo_reports",
+    table="gsc_dim_country"
+)
 
 # ---------- ENSURE TABLE EXISTS ----------
 def ensure_table():
@@ -231,6 +239,26 @@ def fetch_gsc_data(start_date, end_date, existing_keys):
 
             if batch_new:
                 df_batch = pd.DataFrame(batch_new)
+
+                # ---------- APPLY COUNTRY MAPPING FOR THIS BATCH (if applicable) ----------
+                # only attempt mapping for batches that requested the 'country' dimension
+                if "country" in [d.lower() for d in dims]:
+                    # find actual country column name in df_batch (case-insensitive)
+                    country_col = next((c for c in df_batch.columns if c.lower() == "country"), None)
+
+                    if country_col is None:
+                        print(f"[DEBUG] Batch {i}: expected 'country' column but none found in columns. Skipping country mapping.", flush=True)
+                    else:
+                        # quick samples to inspect incoming codes
+                        sample_vals = pd.Series(df_batch[country_col].astype(str)).dropna().unique()[:20]
+
+                        # apply robust mapping (uses utils.robust_map_country_column)
+                        df_batch = robust_map_country_column(df_batch, country_col=country_col, country_map=COUNTRY_MAP, new_col="Country")
+                        # now show how many mapped / unmapped
+                        mapped_count = df_batch["Country"].notna().sum()
+                        total_count = len(df_batch)
+
+                # ---------- UPLOAD to BQ ----------
                 inserted = upload_to_bq(df_batch)
                 total_inserted += inserted
                 all_new_rows.extend(batch_new)
