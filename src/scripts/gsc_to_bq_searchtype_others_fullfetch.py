@@ -19,9 +19,7 @@ from datetime import datetime
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from google.cloud import bigquery
-from utils.gsc_country_utils import load_country_map, map_country_column
-# add robust function too
-from utils.gsc_country_utils import robust_map_country_column
+from utils.gsc_country_utils import load_country_map, robust_map_country_column
 
 # ---------- MAIN CONFIG ----------
 SITE_URL = "sc-domain:bamtabridsazan.com"
