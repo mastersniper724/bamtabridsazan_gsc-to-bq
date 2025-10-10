@@ -601,24 +601,6 @@ def main():
 
     total_all_inserted = inserted_main + inserted_noindex + inserted_b4 + inserted_site
 
-    # ---------- MAP COUNTRY COLUMN ----------
-    # فرض می‌کنیم COUNTRY_MAP قبلاً در بلوک CLIENTS ساخته شده
-
-    for df_name, df in [("df_new", df_new), ("df_noindex", df_noindex), 
-                        ("df_batch4", df_batch4), ("df_site", df_site)]:
-        if df is not None and not df.empty:
-            if "country_code" in df.columns:
-                df_mapped = map_country_column(df, country_col="country_code", country_map=COUNTRY_MAP)
-                # بازنویسی DataFrame اصلی
-                if df_name == "df_new":
-                    df_new = df_mapped
-                elif df_name == "df_noindex":
-                    df_noindex = df_mapped
-                elif df_name == "df_batch4":
-                    df_batch4 = df_mapped
-                elif df_name == "df_site":
-                    df_site = df_mapped
-
     # Compose CSV output if requested
     if CSV_TEST_FILE:
         try:
