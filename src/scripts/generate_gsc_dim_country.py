@@ -1,6 +1,6 @@
 # ============================================================
 # File: generate_gsc_dim_country.py
-# Version: 1.0
+# Version: 1.1 Removing "ZZ" and "ZZZ" for "Unknown Region"
 # Purpose: Generate a full ISO 3166-1 country dimension table
 #          with both Alpha-2 and Alpha-3 codes for BigQuery.
 # Author: MasterSniper ETL Module
@@ -32,13 +32,6 @@ def build_country_dataframe() -> pd.DataFrame:
             "country_code_alpha2": country.alpha_2.upper(),
             "country_code_alpha3": country.alpha_3.upper(),
         })
-
-    # اضافه کردن رکورد Unknown برای GSC (کد zzz)
-    records.append({
-        "country_name": "Unknown Region",
-        "country_code_alpha2": "ZZ",
-        "country_code_alpha3": "ZZZ",
-    })
 
     df = pd.DataFrame(records)
     df = df.sort_values(by="country_name").reset_index(drop=True)
