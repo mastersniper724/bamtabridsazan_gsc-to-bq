@@ -272,12 +272,34 @@ def fetch_gsc_data(start_date, end_date, existing_keys):
                 if batch_new:
                     df_batch = pd.DataFrame(batch_new)
 
-                    # ✅ فقط اگر در ابعاد این batch ستون country داریم
-                    if "country" in dims:
-                        # اطمینان از اینکه ستون تکراری ایجاد نشود
-                        if "Country" not in df_batch.columns and "country" in df_batch.columns:
-                            df_batch = map_country_column(df_batch, country_col="Country", country_map=COUNTRY_MAP)
+                    # ---------- APPLY COUNTRY MAPPING FOR THIS BATCH (if applicable) ----------
+                    # only attempt mapping for batches that requested the 'country' dimension
+                    if "country" in [d.lower() for d in dims]:
+                        # find actual country column name in df_batch (case-insensitive)
+                        country_col = next((c for c in df_batch.columns if c.lower() == "country"), None)
 
+                        print(f"[DEBUG] Batch {i} dims={dims} — columns={df_batch.columns.tolist()}", flush=True)
+                        if country_col is None:
+                            print(f"[DEBUG] Batch {i}: expected 'country' column but none found in columns. Skipping country mapping.", flush=True)
+                        else:
+                            # quick samples to inspect incoming codes
+                            sample_vals = pd.Series(df_batch[country_col].astype(str)).dropna().unique()[:20]
+                            print(f"[DEBUG] Batch {i}: sample incoming country values ({len(sample_vals)} shown): {sample_vals}", flush=True)
+
+                            # show that COUNTRY_MAP has been loaded and sample keys
+                            try:
+                                print(f"[DEBUG] COUNTRY_MAP size: {len(COUNTRY_MAP)}; sample keys: {list(COUNTRY_MAP)[:20]}", flush=True)
+                            except Exception as e:
+                                print(f"[DEBUG] COUNTRY_MAP not available or error: {e}", flush=True)
+
+                            # apply robust mapping (uses utils.robust_map_country_column)
+                            df_batch = robust_map_country_column(df_batch, country_col=country_col, country_map=COUNTRY_MAP, new_col="Country")
+                            # now show how many mapped / unmapped
+                            mapped_count = df_batch["Country"].notna().sum()
+                            total_count = len(df_batch)
+                            print(f"[DEBUG] Batch {i}: country mapping applied. mapped={mapped_count} / total={total_count}", flush=True)
+
+                    # ---------- UPLOAD to BQ ----------
                     inserted = upload_to_bq(df_batch)
                     total_inserted += inserted
                     all_new_rows.extend(batch_new)
