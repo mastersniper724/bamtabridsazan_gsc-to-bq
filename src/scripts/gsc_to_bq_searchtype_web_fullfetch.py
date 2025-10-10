@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 # ============================================================
 # File: gsc_to_bq_fullfetch.py
-# Revision: Rev6.6.14 — read existing_keys once; Duplicate-check enforced for Blocks B & C; logs improved
+# Revision: Rev6.7 — Converting ISO 3166 Alpha-2 Codes country values to full Country Name.
 # Purpose: Full fetch from GSC -> BigQuery with duplicate prevention and sitewide total batch
 # ============================================================
 

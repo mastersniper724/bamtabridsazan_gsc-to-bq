@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 # ============================================================
 # File: gsc_to_bq_othersearchtypes_fullfetch.py
-# Revision: Rev.6
+# Revision: Rev.6 - Converting ISO 3166 Alpha-2 Codes country values to full Country Name.
 # Purpose: Full fetch from GSC -> for Image / Video / News Search Types
 # Notes: Fixes for pagination loop, ensures SearchType=image is processed,
 #        and updates BigQuery table schema to include SearchType if missing.
