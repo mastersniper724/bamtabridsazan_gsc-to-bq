@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 # ============================================================
 # File: gsc_country_utils.py
-# Revision: Rev.2 - unified mapping using alpha2 & alpha3 columns
+# Revision: Rev.2.1 - Adding Kosovo country
 # Purpose: Converting ISO 3166 Alpha-2 / Alpha-3 Codes or names
 #          to full Country Name using BigQuery reference table.
 # ============================================================
@@ -41,6 +41,7 @@ def load_country_map(project: str, dataset: str, table: str) -> dict:
     country_map["ZZ"] = "Unknown Region"
     country_map["ZZZ"] = "Unknown Region"
     country_map["UNKNOWN"] = "Unknown Region"
+    country_map["XKK"] = "Unknown Region"
     
     return country_map
 
