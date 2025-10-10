@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 # ============================================================
 # File: gsc_to_bq_othersearchtypes_fullfetch.py
-# Revision: Rev.6 - Converting ISO 3166 Alpha-2 Codes country values to full Country Name.
+# Revision: Rev.6.1 - Converting ISO 3166 Alpha-2 Codes country values to full Country Name.
 # Purpose: Full fetch from GSC -> for Image / Video / News Search Types
 # Notes: Fixes for pagination loop, ensures SearchType=image is processed,
 #        and updates BigQuery table schema to include SearchType if missing.
@@ -68,11 +68,13 @@ bq_client = get_bq_client()
 table_ref = bq_client.dataset(BQ_DATASET).table(BQ_TABLE)
 
 # ---------- COUNTRY MAPPING ----------
-COUNTRY_MAP = load_country_map(
-    project="bamtabridsazan",
-    dataset="seo_reports",
-    table="gsc_dim_country"
-)
+client = bigquery.Client()
+query = """
+    SELECT country_code_alpha3 AS country_code, country_name
+    FROM `bamtabridsazan.seo_reports.gsc_dim_country`
+"""
+COUNTRY_MAP = dict(client.query(query).to_dataframe().apply(lambda r: (r['country_code'].upper(), r['country_name']), axis=1))
+
 
 # ---------- ENSURE TABLE EXISTS & SCHEMA UPDATES ----------
 def ensure_table_and_schema():
