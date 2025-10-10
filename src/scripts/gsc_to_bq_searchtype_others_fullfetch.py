@@ -77,8 +77,6 @@ df_country = client.query(query).to_dataframe()
 df_country["country_code"] = df_country["country_code"].str.upper()
 COUNTRY_MAP = dict(zip(df_country["country_code"], df_country["country_name"]))
 
-print(f"[DEBUG] Loaded {len(COUNTRY_MAP)} country mappings. Sample keys: {list(COUNTRY_MAP.keys())[:10]}", flush=True)
-
 # ---------- ENSURE TABLE EXISTS & SCHEMA UPDATES ----------
 def ensure_table_and_schema():
     """
