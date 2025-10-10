@@ -271,11 +271,11 @@ def fetch_gsc_data(start_date, end_date, existing_keys):
                 new_candidates_for_batch += len(batch_new)
                 if batch_new:
                     df_batch = pd.DataFrame(batch_new)
-                    
+
                     # ✅ فقط اگر در ابعاد این batch ستون country داریم
                     if "country" in dims:
-                        # اطمینان از وجود ستون Country (حساس به حروف نیست)
-                        if "Country" in df_batch.columns:
+                        # اطمینان از اینکه ستون تکراری ایجاد نشود
+                        if "Country" not in df_batch.columns and "country" in df_batch.columns:
                             df_batch = map_country_column(df_batch, country_col="Country", country_map=COUNTRY_MAP)
 
                     inserted = upload_to_bq(df_batch)
