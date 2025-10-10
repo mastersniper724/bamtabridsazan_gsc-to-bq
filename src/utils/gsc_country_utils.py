@@ -41,7 +41,7 @@ def load_country_map(project: str, dataset: str, table: str) -> dict:
     country_map["ZZ"] = "Unknown Region"
     country_map["ZZZ"] = "Unknown Region"
     country_map["UNKNOWN"] = "Unknown Region"
-    country_map["XKK"] = "Unknown Region"
+    country_map["XKK"] = "Kosovo"
     
     return country_map
 
