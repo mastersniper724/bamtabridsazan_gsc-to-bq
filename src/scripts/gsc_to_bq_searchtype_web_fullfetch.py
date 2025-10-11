@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 # ============================================================
 # File: gsc_to_bq_fullfetch.py
-# Revision: Rev6.7 — Converting ISO 3166 Alpha-2 Codes country values to full Country Name.
+# Revision: Rev6.8 — Converting ISO 3166 Alpha-2 Codes country values to full Country Name.
 # Purpose: Full fetch from GSC -> BigQuery with duplicate prevention and sitewide total batch
 # ============================================================
 
@@ -23,7 +23,7 @@ from utils.gsc_country_utils import load_country_map, robust_map_country_column
 SITE_URL = "sc-domain:bamtabridsazan.com"
 BQ_PROJECT = "bamtabridsazan"
 BQ_DATASET = "seo_reports"
-BQ_TABLE = "bamtabridsazan__gsc__raw_domain_data_fullfetch"
+BQ_TABLE = "temp_bamtabridsazan__gsc__raw_domain_data_fullfetch"
 ROW_LIMIT = 25000
 RETRY_DELAY = 60  # seconds
 SERVICE_ACCOUNT_FILE = os.environ.get("SERVICE_ACCOUNT_FILE", "gcp-key.json")
@@ -61,11 +61,14 @@ bq_client = get_bq_client()
 table_ref = bq_client.dataset(BQ_DATASET).table(BQ_TABLE)
 
 # ---------- COUNTRY MAPPING ----------
-COUNTRY_MAP = load_country_map(
-    project="bamtabridsazan",
-    dataset="seo_reports",
-    table="gsc_dim_country"
-)
+client = bigquery.Client()
+query = """
+    SELECT country_code_alpha3 AS country_code, country_name
+    FROM `bamtabridsazan.seo_reports.gsc_dim_country`
+"""
+df_country = client.query(query).to_dataframe()
+df_country["country_code"] = df_country["country_code"].str.upper()
+COUNTRY_MAP = dict(zip(df_country["country_code"], df_country["country_name"]))
 
 # ---------- ENSURE TABLE EXISTS ----------
 def ensure_table():
@@ -84,6 +87,7 @@ def ensure_table():
             bigquery.SchemaField("Impressions", "INTEGER"),
             bigquery.SchemaField("CTR", "FLOAT"),
             bigquery.SchemaField("Position", "FLOAT"),
+            bigquery.SchemaField("SearchType", "STRING"),
             bigquery.SchemaField("unique_key", "STRING"),
         ]
         table = bigquery.Table(table_ref, schema=schema)
@@ -146,6 +150,7 @@ def upload_to_bq(df):
             bigquery.SchemaField("Impressions", "INTEGER"),
             bigquery.SchemaField("CTR", "FLOAT"),
             bigquery.SchemaField("Position", "FLOAT"),
+            bigquery.SchemaField("SearchType", "STRING"),
             bigquery.SchemaField("unique_key", "STRING"),
         ],
     )
@@ -226,6 +231,7 @@ def fetch_gsc_data(start_date, end_date, existing_keys):
                     "Impressions": r.get("impressions", 0),
                     "CTR": r.get("ctr", 0.0),
                     "Position": r.get("position", 0.0),
+                    "SearchType": "web",
                 }
 
                 unique_key = generate_unique_key(row)
@@ -273,7 +279,7 @@ def fetch_gsc_data(start_date, end_date, existing_keys):
         total_new_candidates_overall += new_candidates_for_batch
 
     df_all_new = pd.DataFrame(all_new_rows)
-    print(f"[INFO] fetch_gsc_data summary: fetched_overall={total_fetched_overall}, new_candidates_overall={total_new_candidates_overall}, inserted_overall={total_inserted}", flush=True)
+    print(f"[INFO] Fetch_GSC_Data summary: fetched_overall={total_fetched_overall}, new_candidates_overall={total_new_candidates_overall}, inserted_overall={total_inserted}", flush=True)
     return df_all_new, total_inserted
 
 # ---------- NEW: Isolated No-Index fetch (replaces old Batch7 behavior) ----------
@@ -324,6 +330,7 @@ def fetch_noindex_batch(start_date, end_date, existing_keys):
                         "Impressions": r.get("impressions", 0),
                         "CTR": r.get("ctr", 0.0),
                         "Position": r.get("position", 0.0),
+                        "SearchType": "web",
                     }
                     row["unique_key"] = generate_unique_key(row)
                     if row["unique_key"] not in existing_keys:
@@ -340,7 +347,7 @@ def fetch_noindex_batch(start_date, end_date, existing_keys):
         df_noindex = pd.DataFrame(noindex_rows)
         inserted = upload_to_bq(df_noindex)
 
-    print(f"[INFO] No-Index batch summary: fetched_total={fetched_total}, new_candidates={new_candidates}, inserted={inserted}", flush=True)
+    print(f"[INFO] Batch 5, No-Index summary: fetched_total={fetched_total}, new_candidates={new_candidates}, inserted={inserted}", flush=True)
     return pd.DataFrame(noindex_rows), inserted
 
 # ---------- A: FETCH SITEWIDE BATCH (ISOLATED) ----------
@@ -350,7 +357,7 @@ def fetch_sitewide_batch(start_date, end_date, existing_keys):
     Inserts __SITE_TOTAL__ rows and placeholder dates for missing days.
     existing_keys is passed in to prevent duplicates.
     """
-    print("[INFO] Running sitewide batch ['date']...", flush=True)
+    print("[INFO] Running Batch 7: Sitewide batch ['date']...", flush=True)
     service = get_gsc_service()
     all_new_rows = []
     total_new_count = 0
@@ -371,7 +378,7 @@ def fetch_sitewide_batch(start_date, end_date, existing_keys):
         try:
             resp = service.searchanalytics().query(siteUrl=SITE_URL, body=request).execute()
         except Exception as e:
-            print(f"[ERROR] Sitewide batch error: {e}, retrying in {RETRY_DELAY} sec...", flush=True)
+            print(f"[ERROR] Batch 7: Sitewide batch error: {e}, retrying in {RETRY_DELAY} sec...", flush=True)
             time.sleep(RETRY_DELAY)
             continue
 
@@ -395,6 +402,7 @@ def fetch_sitewide_batch(start_date, end_date, existing_keys):
                 "Impressions": r.get("impressions", 0),
                 "CTR": r.get("ctr", 0.0),
                 "Position": r.get("position", 0.0),
+                "SearchType": "web",
             }
 
             unique_key = generate_unique_key(row)
@@ -430,13 +438,14 @@ def fetch_sitewide_batch(start_date, end_date, existing_keys):
                 "Impressions": None,
                 "CTR": None,
                 "Position": None,
+                "SearchType": "web",
             }
             unique_key = generate_unique_key(placeholder_row)
             if unique_key not in existing_keys:
                 existing_keys.add(unique_key)
                 placeholder_row["unique_key"] = unique_key
                 all_new_rows.append(placeholder_row)
-                print(f"[INFO] Sitewide batch: adding placeholder for missing date {date_str}", flush=True)
+                print(f"[INFO] Batch 7, Sitewide batch: adding placeholder for missing date {date_str}", flush=True)
 
     # Insert all placeholders at once
     placeholders_only = [row for row in all_new_rows if row["Clicks"] is None]
@@ -445,7 +454,7 @@ def fetch_sitewide_batch(start_date, end_date, existing_keys):
         inserted = upload_to_bq(df_placeholders)
         total_new_count += inserted
 
-    print(f"[INFO] Sitewide batch done: fetched_total={fetched_total}, new_candidates={new_candidates}, inserted={total_new_count}", flush=True)
+    print(f"[INFO] Batch 7, Sitewide done: fetched_total={fetched_total}, new_candidates={new_candidates}, inserted={total_new_count}", flush=True)
     return pd.DataFrame(all_new_rows), total_new_count
 
 # ---------- MAIN ----------
@@ -466,7 +475,7 @@ def main():
     # ----------------------------
     # B. Fetch Batch 4: Date + Page (Page IS NOT NULL)
     # ----------------------------
-    print("[INFO] Fetching Batch 4 (Date + Page, excluding NULL pages)...", flush=True)
+    print("[INFO] Fetching Batch 6 (Date + Page, excluding NULL pages)...", flush=True)
     try:
         service = get_gsc_service()
         start_row = 0
@@ -501,6 +510,7 @@ def main():
                         "Impressions": r.get("impressions", 0),
                         "CTR": r.get("ctr", 0.0),
                         "Position": r.get("position", 0.0),
+                        "SearchType": "web",
                     }
                     unique_key = generate_unique_key(row)
                     if unique_key not in existing_keys:
@@ -516,17 +526,17 @@ def main():
         inserted_b4 = 0
         if all_rows:
             df_batch4 = pd.DataFrame(all_rows)
-            print(f"[INFO] Batch 4 fetched rows: {len(df_batch4)}", flush=True)
+            print(f"[INFO] Batch 6 fetched rows: {len(df_batch4)}", flush=True)
             if not df_batch4.empty:
                 inserted_b4 = upload_to_bq(df_batch4)
-                print(f"[INFO] Batch 4: Inserted {inserted_b4} new rows to BigQuery.", flush=True)
+                print(f"[INFO] Batch 6: Inserted {inserted_b4} new rows to BigQuery.", flush=True)
         else:
-            print("[INFO] Batch 4: No non-null page rows found.", flush=True)
+            print("[INFO] Batch 6: No non-null page rows found.", flush=True)
 
-        print(f"[INFO] Batch 4 summary: fetched_total={fetched_b4}, new_candidates={new_b4}, inserted={inserted_b4}", flush=True)
+        print(f"[INFO] Batch 6 summary: fetched_total={fetched_b4}, new_candidates={new_b4}, inserted={inserted_b4}", flush=True)
 
     except Exception as e:
-        print(f"[ERROR] Failed to fetch Batch 4 (Date + Page): {e}", flush=True)
+        print(f"[ERROR] Failed to fetch Batch 6 (Date + Page): {e}", flush=True)
         inserted_b4 = 0
         df_batch4 = pd.DataFrame([])
 
@@ -553,7 +563,7 @@ def main():
                 print(f"[INFO] CSV test output written: {CSV_TEST_FILE}", flush=True)
             else:
                 # write empty csv with headers
-                cols = ["Date","Query","Page","Country","Device","Clicks","Impressions","CTR","Position","unique_key"]
+                cols = ["Date","Query","Page","Country","Device","Clicks","Impressions","CTR","Position","unique_key","SearchType"]
                 pd.DataFrame(columns=cols).to_csv(CSV_TEST_FILE, index=False)
                 print(f"[INFO] CSV test output written (empty): {CSV_TEST_FILE}", flush=True)
         except Exception as e:
