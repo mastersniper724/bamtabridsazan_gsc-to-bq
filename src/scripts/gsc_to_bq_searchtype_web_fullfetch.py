@@ -354,184 +354,115 @@ def fetch_noindex_batch(start_date, end_date, existing_keys):
     print(f"[INFO] Batch 5, No-Index summary: fetched_total={fetched_total}, new_candidates={new_candidates}, inserted={inserted}", flush=True)
     return pd.DataFrame(noindex_rows), inserted
 
-# ---------- Batch 7: SITEWIDE (ISOLATED) ----------
+# =================================================
+#  BLOCK 7: fetch_sitewide_batch  (No-DML Version)
+# =================================================
 def fetch_sitewide_batch(start_date, end_date, existing_keys):
     """
-    Sitewide: dimensions = ['date']
-    Inserts __SITE_TOTAL__ rows and placeholder dates for missing days.
-    existing_keys is passed in to prevent duplicates within the batch.
-    Implements Upsert logic: updates placeholders if real data exists.
+    Fetch sitewide GSC data (Query='__SITE_TOTAL__', Page='__SITE_TOTAL__')
+    Inserts new rows and replaces incomplete ones, without using DML (no UPDATE/MERGE).
+    Works even when billing is disabled.
     """
-    print("[INFO] Running Batch 7: Sitewide ['date']...", flush=True)
-    service = get_gsc_service()
-    all_new_rows = []
-    total_new_count = 0
+    from google.cloud import bigquery
+    import pandas as pd
 
     client = bigquery.Client()
     full_table_id = f"{BQ_PROJECT}.{BQ_DATASET}.{BQ_TABLE}"
 
-    # ---------- Step 0: helper functions ----------
+    print(f"[INFO] Fetching sitewide data for {start_date} → {end_date}", flush=True)
 
-    def get_existing_sitewide_keys(start_date, end_date):
-        query = f"""
-            SELECT unique_key
-            FROM `{full_table_id}`
-            WHERE Date BETWEEN '{start_date}' AND '{end_date}'
-              AND Query='__SITE_TOTAL__'
-              AND Page='__SITE_TOTAL__'
-        """
-        result = client.query(query).result()
-        return set(row.unique_key for row in result)
+    # Step 0: load existing keys and incomplete keys
+    existing_bq_keys = get_existing_sitewide_keys(start_date, end_date, client, full_table_id)
+    incomplete_keys = get_incomplete_keys(start_date, end_date, client, full_table_id)
 
-    def get_incomplete_keys(start_date, end_date):
-        query = f"""
-            SELECT unique_key
-            FROM `{full_table_id}`
-            WHERE Date BETWEEN '{start_date}' AND '{end_date}'
-              AND (Impressions IS NULL OR Clicks IS NULL OR CTR IS NULL OR Position IS NULL)
-              AND Query='__SITE_TOTAL__'
-              AND Page='__SITE_TOTAL__'
-        """
-        result = client.query(query).result()
-        return set(row.unique_key for row in result)
-
-    def update_row_in_bq(row):
-        update_query = f"""
-            UPDATE `{full_table_id}`
-            SET
-              Clicks = @Clicks,
-              Impressions = @Impressions,
-              CTR = @CTR,
-              Position = @Position
-            WHERE unique_key = @unique_key
-        """
-        job_config = bigquery.QueryJobConfig(
-            query_parameters=[
-                bigquery.ScalarQueryParameter("Clicks", "FLOAT64", row.get("Clicks")),
-                bigquery.ScalarQueryParameter("Impressions", "FLOAT64", row.get("Impressions")),
-                bigquery.ScalarQueryParameter("CTR", "FLOAT64", row.get("CTR")),
-                bigquery.ScalarQueryParameter("Position", "FLOAT64", row.get("Position")),
-                bigquery.ScalarQueryParameter("unique_key", "STRING", row.get("unique_key")),
-            ]
-        )
-        client.query(update_query, job_config=job_config).result()
-        print(f"[INFO] Batch 7: Updated incomplete row for {row.get('Date')}", flush=True)
-
-    # ---------- Step 1: load existing keys ----------
-    existing_bq_keys = get_existing_sitewide_keys(start_date, end_date)
-    incomplete_keys = get_incomplete_keys(start_date, end_date)
-
-    # ---------- Step 2: fetch actual GSC rows ----------
-    start_row = 0
-    batch_index = 1
-    fetched_total = 0
+    batch_new = []
+    rows_to_update = []
     new_candidates = 0
     updated_count = 0
     skipped_count = 0
 
-    while True:
-        request = {
-            "startDate": start_date,
-            "endDate": end_date,
-            "dimensions": ["date"],
-            "rowLimit": ROW_LIMIT,
-            "startRow": start_row,
-        }
+    # --------------------------------------------
+    # Step 1: Fetch GSC data (sitewide)
+    # --------------------------------------------
+    df_site = fetch_gsc_data(start_date=start_date, end_date=end_date)
+    if df_site.empty:
+        print(f"[WARN] No sitewide data found for {start_date} → {end_date}", flush=True)
+        return pd.DataFrame([]), 0
+
+    for _, row in df_site.iterrows():
+        unique_key = row["unique_key"]
+
+        if unique_key in existing_bq_keys:
+            if unique_key in incomplete_keys:
+                rows_to_update.append(row.copy())
+                updated_count += 1
+            else:
+                skipped_count += 1
+                continue
+        elif unique_key not in existing_keys:
+            existing_keys.add(unique_key)
+            batch_new.append(row)
+            new_candidates += 1
+
+    print(f"[INFO] Sitewide: new={new_candidates}, updates={updated_count}, skipped={skipped_count}", flush=True)
+
+    # Convert new rows
+    df_new = pd.DataFrame(batch_new) if batch_new else pd.DataFrame([])
+
+    # --------------------------------------------
+    # Step 2: Rebuild partial table (no DML)
+    # --------------------------------------------
+    if updated_count > 0:
+        df_updates = pd.DataFrame(rows_to_update)
+
+        # prepare list of keys for exclusion
+        keys_list = df_updates["unique_key"].astype(str).tolist()
+        keys_quoted = ",".join([f"'{k}'" for k in keys_list])
+
+        print(f"[INFO] Reading existing rows excluding {len(keys_list)} keys for rewrite...", flush=True)
+        read_query = f"""
+            SELECT *
+            FROM `{full_table_id}`
+            WHERE Date BETWEEN '{start_date}' AND '{end_date}'
+              AND NOT unique_key IN ({keys_quoted})
+        """
+
         try:
-            resp = service.searchanalytics().query(siteUrl=SITE_URL, body=request).execute()
+            df_existing = client.query(read_query).to_dataframe()
         except Exception as e:
-            print(f"[ERROR] Batch 7: Sitewide error: {e}, retrying in {RETRY_DELAY} sec...", flush=True)
-            time.sleep(RETRY_DELAY)
-            continue
+            print(f"[ERROR] Could not read existing rows: {e}", flush=True)
+            df_existing = pd.DataFrame([])
 
-        rows = resp.get("rows", [])
-        if not rows:
-            break
+        # merge and rewrite
+        if df_existing.empty:
+            df_merged = df_updates
+        else:
+            df_merged = pd.concat([df_existing, df_updates], ignore_index=True, sort=False)
 
-        fetched_total += len(rows)
-        batch_new = []
+        print(f"[INFO] Rewriting {len(df_merged)} rows to {full_table_id} (no DML)...", flush=True)
 
-        for r in rows:
-            keys = r.get("keys", [])
-            date = keys[0] if len(keys) > 0 else None
+        job_config = bigquery.LoadJobConfig(write_disposition="WRITE_TRUNCATE")
+        try:
+            load_job = client.load_table_from_dataframe(df_merged, full_table_id, job_config=job_config)
+            load_job.result()
+            print(f"[SUCCESS] Rewrote {len(df_merged)} rows to BigQuery successfully.", flush=True)
+        except Exception as e:
+            print(f"[ERROR] Failed to load merged data: {e}", flush=True)
 
-            row = {
-                "Date": date,
-                "Query": "__SITE_TOTAL__",
-                "Page": "__SITE_TOTAL__",
-                "Country": None,
-                "Device": None,
-                "SearchAppearance": None,
-                "Clicks": r.get("clicks", 0),
-                "Impressions": r.get("impressions", 0),
-                "CTR": r.get("ctr", 0.0),
-                "Position": r.get("position", 0.0),
-                "SearchType": "web",
-            }
+    # --------------------------------------------
+    # Step 3: Insert new rows
+    # --------------------------------------------
+    if not df_new.empty:
+        print(f"[INFO] Inserting {len(df_new)} new sitewide rows...", flush=True)
+        job_config = bigquery.LoadJobConfig(write_disposition="WRITE_APPEND")
+        try:
+            load_job = client.load_table_from_dataframe(df_new, full_table_id, job_config=job_config)
+            load_job.result()
+            print(f"[SUCCESS] Inserted {len(df_new)} new sitewide rows.", flush=True)
+        except Exception as e:
+            print(f"[ERROR] Failed to insert new rows: {e}", flush=True)
 
-            unique_key = generate_unique_key(row)
-            row["unique_key"] = unique_key
-
-            # ---------- Upsert logic ----------
-            if unique_key in existing_bq_keys:
-                if unique_key in incomplete_keys:
-                    update_row_in_bq(row)
-                    updated_count += 1
-                else:
-                    skipped_count += 1
-                    continue
-            elif unique_key not in existing_keys:
-                existing_keys.add(unique_key)
-                batch_new.append(row)
-                new_candidates += 1
-
-        if batch_new:
-            df_batch = pd.DataFrame(batch_new)
-            inserted = upload_to_bq(df_batch)
-            total_new_count += inserted
-            all_new_rows.extend(batch_new)
-
-        batch_index += 1
-        if len(rows) < ROW_LIMIT:
-            break
-        start_row += len(rows)
-
-    # ---------- Step 3: add placeholder rows ----------
-    date_range = pd.date_range(start=start_date, end=end_date)
-    placeholders_only = []
-
-    for dt in date_range:
-        date_str = dt.strftime("%Y-%m-%d")
-        if not any(row["Date"] == date_str and row["Query"] == "__SITE_TOTAL__" for row in all_new_rows):
-            placeholder_row = {
-                "Date": date_str,
-                "Query": "__SITE_TOTAL__",
-                "Page": "__SITE_TOTAL__",
-                "Country": None,
-                "Device": None,
-                "SearchAppearance": None,
-                "Clicks": None,
-                "Impressions": None,
-                "CTR": None,
-                "Position": None,
-                "SearchType": "web",
-            }
-            unique_key = generate_unique_key(placeholder_row)
-            placeholder_row["unique_key"] = unique_key
-
-            if unique_key not in existing_bq_keys and unique_key not in existing_keys:
-                existing_keys.add(unique_key)
-                placeholders_only.append(placeholder_row)
-                print(f"[INFO] Batch 7, Sitewide: adding placeholder for missing date {date_str}", flush=True)
-
-    if placeholders_only:
-        df_placeholders = pd.DataFrame(placeholders_only)
-        inserted = upload_to_bq(df_placeholders)
-        total_new_count += inserted
-        all_new_rows.extend(placeholders_only)
-
-    print(f"[INFO] Batch 7 done: fetched={fetched_total}, inserted={total_new_count}, updated={updated_count}, skipped={skipped_count}, placeholders={len(placeholders_only)}", flush=True)
-    return pd.DataFrame(all_new_rows), total_new_count
+    return df_site, len(df_new)
 
 # ---------- MAIN ----------
 def main():
