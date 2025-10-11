@@ -368,20 +368,31 @@ def fetch_sitewide_batch(start_date, end_date, existing_keys):
     total_new_count = 0
 
     # ---------- Step 0: load existing unique_keys from BigQuery ----------
-    def get_existing_sitewide_keys(start_date, end_date):
+    def get_existing_sitewide_keys(start_date, end_date, table_name):
         client = bigquery.Client()
         query = f"""
             SELECT unique_key
-            FROM `bamtabridsazan.seo_reports.bamtabridsazan__stg__raw_data__daily`
+            FROM `{table_name}`
             WHERE Date BETWEEN '{start_date}' AND '{end_date}'
               AND Query='__SITE_TOTAL__'
               AND Page='__SITE_TOTAL__'
         """
-        result = client.query(query).result()
-        return set([row.unique_key for row in result])
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[
+                bigquery.ScalarQueryParameter("start_date", "DATE", start_date),
+                bigquery.ScalarQueryParameter("end_date", "DATE", end_date),
+            ]
+        )
 
-    existing_bq_keys = get_existing_sitewide_keys(start_date, end_date)
-    # existing_bq_keys = set of unique_key already in BigQuery for sitewide batch
+        query_job = client.query(query, job_config=job_config)
+        result = query_job.result()
+
+        return set([row.unique_key for row in result])
+    
+    # ======= نحوه فراخوانی =======
+    # توجه: BQ_TABLE باید مقداردهی شده باشد به full table id یا اگر در بالای فایل تعریف کرده‌ای:
+    # BQ_TABLE = "bamtabridsazan.seo_reports.bamtabridsazan__gsc__raw_domain_data_fullfetch"
+    existing_bq_keys = get_existing_sitewide_keys(START_DATE, END_DATE, BQ_TABLE)
 
     # ---------- Step 1: fetch actual GSC rows for ['date'] ----------
     start_row = 0
