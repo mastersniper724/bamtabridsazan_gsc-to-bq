@@ -420,7 +420,7 @@ def fetch_sitewide_batch(start_date, end_date, existing_keys):
     # --------------------------------------------
     # Step 1: Fetch GSC data (sitewide)
     # --------------------------------------------
-    df_site = fetch_gsc_data(start_date=start_date, end_date=end_date)
+    df_site = fetch_gsc_data(start_date=start_date, end_date=end_date, existing_keys=existing_keys)
     if df_site.empty:
         print(f"[WARN] No sitewide data found for {start_date} → {end_date}", flush=True)
         return pd.DataFrame([]), 0
