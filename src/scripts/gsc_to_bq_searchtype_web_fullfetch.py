@@ -357,7 +357,7 @@ def fetch_sitewide_batch(start_date, end_date, existing_keys):
     Inserts __SITE_TOTAL__ rows and placeholder dates for missing days.
     existing_keys is passed in to prevent duplicates.
     """
-    print("[INFO] Running Batch 7: Sitewide batch ['date']...", flush=True)
+    print("[INFO] Running Batch 7: Sitewide ['date']...", flush=True)
     service = get_gsc_service()
     all_new_rows = []
     total_new_count = 0
@@ -378,7 +378,7 @@ def fetch_sitewide_batch(start_date, end_date, existing_keys):
         try:
             resp = service.searchanalytics().query(siteUrl=SITE_URL, body=request).execute()
         except Exception as e:
-            print(f"[ERROR] Batch 7: Sitewide batch error: {e}, retrying in {RETRY_DELAY} sec...", flush=True)
+            print(f"[ERROR] Batch 7: Sitewide error: {e}, retrying in {RETRY_DELAY} sec...", flush=True)
             time.sleep(RETRY_DELAY)
             continue
 
@@ -445,7 +445,7 @@ def fetch_sitewide_batch(start_date, end_date, existing_keys):
                 existing_keys.add(unique_key)
                 placeholder_row["unique_key"] = unique_key
                 all_new_rows.append(placeholder_row)
-                print(f"[INFO] Batch 7, Sitewide batch: adding placeholder for missing date {date_str}", flush=True)
+                print(f"[INFO] Batch 7, Sitewide: adding placeholder for missing date {date_str}", flush=True)
 
     # Insert all placeholders at once
     placeholders_only = [row for row in all_new_rows if row["Clicks"] is None]
