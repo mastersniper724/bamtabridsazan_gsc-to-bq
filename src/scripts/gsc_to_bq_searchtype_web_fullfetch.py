@@ -371,7 +371,43 @@ def fetch_sitewide_batch(start_date, end_date, existing_keys):
 
     print(f"[INFO] Fetching sitewide data for {start_date} → {end_date}", flush=True)
 
-    # Step 0: load existing keys and incomplete keys
+    # --------------------------------------------
+    # Helper functions (local definitions)
+    # --------------------------------------------
+    def get_existing_sitewide_keys(start_date, end_date, client, table_name):
+        query = f"""
+            SELECT unique_key
+            FROM `{table_name}`
+            WHERE Date BETWEEN '{start_date}' AND '{end_date}'
+              AND Query='__SITE_TOTAL__'
+              AND Page='__SITE_TOTAL__'
+        """
+        try:
+            result = client.query(query).result()
+            return set([row.unique_key for row in result])
+        except Exception as e:
+            print(f"[WARN] Could not load existing keys: {e}", flush=True)
+            return set()
+
+    def get_incomplete_keys(start_date, end_date, client, table_name):
+        query = f"""
+            SELECT unique_key
+            FROM `{table_name}`
+            WHERE Date BETWEEN '{start_date}' AND '{end_date}'
+              AND (Impressions IS NULL OR Clicks IS NULL OR CTR IS NULL OR Position IS NULL)
+              AND Query='__SITE_TOTAL__'
+              AND Page='__SITE_TOTAL__'
+        """
+        try:
+            result = client.query(query).result()
+            return set([row.unique_key for row in result])
+        except Exception as e:
+            print(f"[WARN] Could not load incomplete keys: {e}", flush=True)
+            return set()
+
+    # --------------------------------------------
+    # Step 0: Load existing + incomplete keys
+    # --------------------------------------------
     existing_bq_keys = get_existing_sitewide_keys(start_date, end_date, client, full_table_id)
     incomplete_keys = get_incomplete_keys(start_date, end_date, client, full_table_id)
 
@@ -406,16 +442,14 @@ def fetch_sitewide_batch(start_date, end_date, existing_keys):
 
     print(f"[INFO] Sitewide: new={new_candidates}, updates={updated_count}, skipped={skipped_count}", flush=True)
 
-    # Convert new rows
     df_new = pd.DataFrame(batch_new) if batch_new else pd.DataFrame([])
 
     # --------------------------------------------
-    # Step 2: Rebuild partial table (no DML)
+    # Step 2: Rewrite incomplete rows (simulate update)
     # --------------------------------------------
     if updated_count > 0:
         df_updates = pd.DataFrame(rows_to_update)
 
-        # prepare list of keys for exclusion
         keys_list = df_updates["unique_key"].astype(str).tolist()
         keys_quoted = ",".join([f"'{k}'" for k in keys_list])
 
@@ -433,24 +467,23 @@ def fetch_sitewide_batch(start_date, end_date, existing_keys):
             print(f"[ERROR] Could not read existing rows: {e}", flush=True)
             df_existing = pd.DataFrame([])
 
-        # merge and rewrite
         if df_existing.empty:
             df_merged = df_updates
         else:
             df_merged = pd.concat([df_existing, df_updates], ignore_index=True, sort=False)
 
-        print(f"[INFO] Rewriting {len(df_merged)} rows to {full_table_id} (no DML)...", flush=True)
+        print(f"[INFO] Rewriting {len(df_merged)} rows to {full_table_id} (WRITE_TRUNCATE)...", flush=True)
 
         job_config = bigquery.LoadJobConfig(write_disposition="WRITE_TRUNCATE")
         try:
             load_job = client.load_table_from_dataframe(df_merged, full_table_id, job_config=job_config)
             load_job.result()
-            print(f"[SUCCESS] Rewrote {len(df_merged)} rows to BigQuery successfully.", flush=True)
+            print(f"[SUCCESS] Rewrote {len(df_merged)} rows successfully.", flush=True)
         except Exception as e:
             print(f"[ERROR] Failed to load merged data: {e}", flush=True)
 
     # --------------------------------------------
-    # Step 3: Insert new rows
+    # Step 3: Insert new rows (append)
     # --------------------------------------------
     if not df_new.empty:
         print(f"[INFO] Inserting {len(df_new)} new sitewide rows...", flush=True)
