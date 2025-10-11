@@ -83,6 +83,7 @@ def ensure_table():
             bigquery.SchemaField("Page", "STRING"),
             bigquery.SchemaField("Country", "STRING"),
             bigquery.SchemaField("Device", "STRING"),
+            bigquery.SchemaField("SearchAppearance", "STRING"),
             bigquery.SchemaField("Clicks", "INTEGER"),
             bigquery.SchemaField("Impressions", "INTEGER"),
             bigquery.SchemaField("CTR", "FLOAT"),
@@ -146,6 +147,7 @@ def upload_to_bq(df):
             bigquery.SchemaField("Page", "STRING"),
             bigquery.SchemaField("Country", "STRING"),
             bigquery.SchemaField("Device", "STRING"),
+            bigquery.SchemaField("SearchAppearance", "STRING"),
             bigquery.SchemaField("Clicks", "INTEGER"),
             bigquery.SchemaField("Impressions", "INTEGER"),
             bigquery.SchemaField("CTR", "FLOAT"),
@@ -227,6 +229,7 @@ def fetch_gsc_data(start_date, end_date, existing_keys):
                     "Page": page,
                     "Country": country,
                     "Device": device,
+                    "SearchAppearance": None,  #Null
                     "Clicks": r.get("clicks", 0),
                     "Impressions": r.get("impressions", 0),
                     "CTR": r.get("ctr", 0.0),
@@ -326,6 +329,7 @@ def fetch_noindex_batch(start_date, end_date, existing_keys):
                         "Page": "__NO_INDEX__",
                         "Country": None,
                         "Device": None,
+                        "SearchAppearance": None,  #Null
                         "Clicks": r.get("clicks", 0),
                         "Impressions": r.get("impressions", 0),
                         "CTR": r.get("ctr", 0.0),
@@ -398,6 +402,7 @@ def fetch_sitewide_batch(start_date, end_date, existing_keys):
                 "Page": "__SITE_TOTAL__",
                 "Country": None,
                 "Device": None,
+                "SearchAppearance": None,  #Null
                 "Clicks": r.get("clicks", 0),
                 "Impressions": r.get("impressions", 0),
                 "CTR": r.get("ctr", 0.0),
@@ -434,6 +439,7 @@ def fetch_sitewide_batch(start_date, end_date, existing_keys):
                 "Page": "__SITE_TOTAL__",
                 "Country": None,
                 "Device": None,
+                "SearchAppearance": None,  #Null
                 "Clicks": None,
                 "Impressions": None,
                 "CTR": None,
@@ -506,6 +512,7 @@ def main():
                         "Page": keys[1],
                         "Country": None,
                         "Device": None,
+                        "SearchAppearance": None,  #Null
                         "Clicks": r.get("clicks", 0),
                         "Impressions": r.get("impressions", 0),
                         "CTR": r.get("ctr", 0.0),
@@ -563,7 +570,7 @@ def main():
                 print(f"[INFO] CSV test output written: {CSV_TEST_FILE}", flush=True)
             else:
                 # write empty csv with headers
-                cols = ["Date","Query","Page","Country","Device","Clicks","Impressions","CTR","Position","unique_key","SearchType"]
+                cols = ["Date","Query","Page","Country","Device","SearchAppearance","Clicks","Impressions","CTR","Position","unique_key","SearchType"]
                 pd.DataFrame(columns=cols).to_csv(CSV_TEST_FILE, index=False)
                 print(f"[INFO] CSV test output written (empty): {CSV_TEST_FILE}", flush=True)
         except Exception as e:
