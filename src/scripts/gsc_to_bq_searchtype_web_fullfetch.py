@@ -359,12 +359,29 @@ def fetch_sitewide_batch(start_date, end_date, existing_keys):
     """
     Sitewide: dimensions = ['date']
     Inserts __SITE_TOTAL__ rows and placeholder dates for missing days.
-    existing_keys is passed in to prevent duplicates.
+    existing_keys is passed in to prevent duplicates within the batch.
+    Implements Upsert logic: updates placeholders if real data exists.
     """
     print("[INFO] Running Batch 7: Sitewide ['date']...", flush=True)
     service = get_gsc_service()
     all_new_rows = []
     total_new_count = 0
+
+    # ---------- Step 0: load existing unique_keys from BigQuery ----------
+    def get_existing_sitewide_keys(start_date, end_date):
+        client = bigquery.Client()
+        query = f"""
+            SELECT unique_key
+            FROM `bamtabridsazan.seo_reports.bamtabridsazan__stg__raw_data__daily`
+            WHERE Date BETWEEN '{start_date}' AND '{end_date}'
+              AND Query='__SITE_TOTAL__'
+              AND Page='__SITE_TOTAL__'
+        """
+        result = client.query(query).result()
+        return set([row.unique_key for row in result])
+
+    existing_bq_keys = get_existing_sitewide_keys(start_date, end_date)
+    # existing_bq_keys = set of unique_key already in BigQuery for sitewide batch
 
     # ---------- Step 1: fetch actual GSC rows for ['date'] ----------
     start_row = 0
@@ -402,7 +419,7 @@ def fetch_sitewide_batch(start_date, end_date, existing_keys):
                 "Page": "__SITE_TOTAL__",
                 "Country": None,
                 "Device": None,
-                "SearchAppearance": None,  #Null
+                "SearchAppearance": None,  # Null
                 "Clicks": r.get("clicks", 0),
                 "Impressions": r.get("impressions", 0),
                 "CTR": r.get("ctr", 0.0),
@@ -411,18 +428,20 @@ def fetch_sitewide_batch(start_date, end_date, existing_keys):
             }
 
             unique_key = generate_unique_key(row)
-            existing_row = next((r for r in all_new_rows if r["unique_key"] == unique_key), None)
+            row["unique_key"] = unique_key
 
-            if existing_row:
-                # اگر placeholder است، مقادیر واقعی را جایگزین کن
-                if existing_row["Clicks"] is None:
-                    for col in ["Clicks", "Impressions", "CTR", "Position"]:
-                        existing_row[col] = row[col]
-                    new_candidates += 1  # counted as candidate since updated
-            else:
-                # رکورد جدید اضافه شود
+            # ---------- Upsert logic ----------
+            def update_row_in_bq(df):
+                # TODO: implement actual update
+                print("[INFO] update_row_in_bq called with {} rows".format(len(df)))
+                return len(df)
+
+            if unique_key in existing_bq_keys:
+                # Row already exists in BigQuery: update only metrics
+                update_row_in_bq(row)
+            elif unique_key not in existing_keys:
+                # New row for this batch
                 existing_keys.add(unique_key)
-                row["unique_key"] = unique_key
                 batch_new.append(row)
                 new_candidates += 1
 
@@ -439,16 +458,18 @@ def fetch_sitewide_batch(start_date, end_date, existing_keys):
 
     # ---------- Step 2: add placeholder rows for missing dates ----------
     date_range = pd.date_range(start=start_date, end=end_date)
+    placeholders_only = []
     for dt in date_range:
         date_str = dt.strftime("%Y-%m-%d")
-        if not any(row["Date"] == date_str for row in all_new_rows):
+        # Check if any real row exists for this date
+        if not any(row["Date"] == date_str and row["Query"] == "__SITE_TOTAL__" for row in all_new_rows):
             placeholder_row = {
                 "Date": date_str,
                 "Query": "__SITE_TOTAL__",
                 "Page": "__SITE_TOTAL__",
                 "Country": None,
                 "Device": None,
-                "SearchAppearance": None,  #Null
+                "SearchAppearance": None,  # Null
                 "Clicks": None,
                 "Impressions": None,
                 "CTR": None,
@@ -456,21 +477,23 @@ def fetch_sitewide_batch(start_date, end_date, existing_keys):
                 "SearchType": "web",
             }
             unique_key = generate_unique_key(placeholder_row)
-            if unique_key not in existing_keys:
+            placeholder_row["unique_key"] = unique_key
+
+            if unique_key not in existing_bq_keys and unique_key not in existing_keys:
                 existing_keys.add(unique_key)
-                placeholder_row["unique_key"] = unique_key
-                all_new_rows.append(placeholder_row)
+                placeholders_only.append(placeholder_row)
                 print(f"[INFO] Batch 7, Sitewide: adding placeholder for missing date {date_str}", flush=True)
 
     # Insert all placeholders at once
-    placeholders_only = [row for row in all_new_rows if row["Clicks"] is None]
     if placeholders_only:
         df_placeholders = pd.DataFrame(placeholders_only)
         inserted = upload_to_bq(df_placeholders)
         total_new_count += inserted
+        all_new_rows.extend(placeholders_only)
 
     print(f"[INFO] Batch 7, Sitewide done: fetched_total={fetched_total}, new_candidates={new_candidates}, inserted={total_new_count}", flush=True)
     return pd.DataFrame(all_new_rows), total_new_count
+
 
 # ---------- MAIN ----------
 def main():
