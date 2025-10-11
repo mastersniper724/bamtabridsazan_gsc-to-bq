@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 # ============================================================
 # File: gsc_to_bq_fullfetch.py
-# Revision: Rev6.8 — Converting ISO 3166 Alpha-2 Codes country values to full Country Name.
+# Revision: Rev6.9 — Converting ISO 3166 Alpha-2 Codes country values to full Country Name.
 # Purpose: Full fetch from GSC -> BigQuery with duplicate prevention and sitewide total batch
 # ============================================================
 
@@ -285,7 +285,7 @@ def fetch_gsc_data(start_date, end_date, existing_keys):
     print(f"[INFO] Fetch_GSC_Data summary: fetched_overall={total_fetched_overall}, new_candidates_overall={total_new_candidates_overall}, inserted_overall={total_inserted}", flush=True)
     return df_all_new, total_inserted
 
-# ---------- NEW: Isolated No-Index fetch (replaces old Batch7 behavior) ----------
+# ---------- Batch 5: Isolated No-Index fetch (ISOLATED) ----------
 def fetch_noindex_batch(start_date, end_date, existing_keys):
     """
     Fetch rows where 'page' is NULL/empty in dimensions ['date','page'].
@@ -354,7 +354,7 @@ def fetch_noindex_batch(start_date, end_date, existing_keys):
     print(f"[INFO] Batch 5, No-Index summary: fetched_total={fetched_total}, new_candidates={new_candidates}, inserted={inserted}", flush=True)
     return pd.DataFrame(noindex_rows), inserted
 
-# ---------- A: FETCH SITEWIDE BATCH (ISOLATED) ----------
+# ---------- Batch 7: SITEWIDE (ISOLATED) ----------
 def fetch_sitewide_batch(start_date, end_date, existing_keys):
     """
     Sitewide: dimensions = ['date']
@@ -411,7 +411,16 @@ def fetch_sitewide_batch(start_date, end_date, existing_keys):
             }
 
             unique_key = generate_unique_key(row)
-            if unique_key not in existing_keys:
+            existing_row = next((r for r in all_new_rows if r["unique_key"] == unique_key), None)
+
+            if existing_row:
+                # اگر placeholder است، مقادیر واقعی را جایگزین کن
+                if existing_row["Clicks"] is None:
+                    for col in ["Clicks", "Impressions", "CTR", "Position"]:
+                        existing_row[col] = row[col]
+                    new_candidates += 1  # counted as candidate since updated
+            else:
+                # رکورد جدید اضافه شود
                 existing_keys.add(unique_key)
                 row["unique_key"] = unique_key
                 batch_new.append(row)
