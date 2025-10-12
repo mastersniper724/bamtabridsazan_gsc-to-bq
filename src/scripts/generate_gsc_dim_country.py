@@ -14,7 +14,7 @@ from google.cloud import bigquery
 # =================================================
 PROJECT_ID = "bamtabridsazan"
 DATASET_ID = "seo_reports"
-TABLE_ID = "gsc_dim_country"
+TABLE_ID = "00_00_gsc_dim_country"
 
 # ---------- BUILD COUNTRY DATA ----------
 def build_country_dataframe() -> pd.DataFrame:
