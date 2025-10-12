@@ -73,7 +73,7 @@ def robust_map_country_column(
             return "Unknown Region"
         if s == "XKK":
             return "Kosovo"
-        return country_map.get(s, None)
+        return country_map.get(s, "__NO_COUNTRY__")
 
     df[new_col] = df[country_col].apply(map_one)
     return df
