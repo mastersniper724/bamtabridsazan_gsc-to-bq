@@ -1,6 +1,6 @@
 # ============================================================
 # File: generate_gsc_dim_country.py
-# Version: 1.1 Removing "ZZ" and "ZZZ" for "Unknown Region"
+# Version: 1.1
 # Purpose: Generate a full ISO 3166-1 country dimension table
 #          with both Alpha-2 and Alpha-3 codes for BigQuery.
 # Author: MasterSniper ETL Module
