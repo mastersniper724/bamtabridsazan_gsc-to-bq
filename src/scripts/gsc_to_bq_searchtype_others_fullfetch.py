@@ -71,7 +71,7 @@ table_ref = bq_client.dataset(BQ_DATASET).table(BQ_TABLE)
 client = bigquery.Client()
 query = """
     SELECT country_code_alpha3 AS country_code, country_name
-    FROM `bamtabridsazan.seo_reports.gsc_dim_country`
+    FROM `bamtabridsazan.seo_reports.00_01_gsc_dim_country`
 """
 df_country = client.query(query).to_dataframe()
 df_country["country_code"] = df_country["country_code"].str.upper()
