@@ -123,7 +123,7 @@ def ensure_table_and_schema():
             bigquery.SchemaField("unique_key", "STRING"),
         ]
         table = bigquery.Table(table_ref, schema=schema)
-        table.clustering_fields = ["Query", "Page"]
+        table.clustering_fields = ["Page", "Query", "Country", "Device"]
         bq_client.create_table(table)
         print(f"[INFO] Table {BQ_TABLE} created with SearchType field.", flush=True)
 
