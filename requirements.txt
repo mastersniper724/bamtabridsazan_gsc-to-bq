@@ -11,3 +11,4 @@ pyarrow
 db-dtypes
 openpyxl
 pycountry
+tabulate
