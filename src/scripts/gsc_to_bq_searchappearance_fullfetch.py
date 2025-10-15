@@ -28,8 +28,8 @@ import uuid
 SITE_URL = "sc-domain:bamtabridsazan.com"
 BQ_PROJECT = 'bamtabridsazan'
 BQ_DATASET = 'seo_reports'
-BQ_TABLE_RAW = 'bamtabridsazan__gsc__raw_domain_data_searchappearance'
-BQ_TABLE_ALLOC = 'bamtabridsazan__gsc__allocated_searchappearance'
+BQ_TABLE_RAW = 'bamtabridsazan__temp_gsc__raw_domain_data_searchappearance'
+BQ_TABLE_ALLOC = 'bamtabridsazan__temp_gsc__allocated_searchappearance'
 ROW_LIMIT = 25000
 RETRY_DELAY = 60  # seconds in case of timeout
 
