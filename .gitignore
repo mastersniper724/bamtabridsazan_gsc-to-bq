@@ -20,3 +20,14 @@ venv/
 
 # System
 .DS_Store
+ 
+# Local Test Pythons Folder
+/src/local_test/
+
+# Local Raw Data Folder
+/data/raw/othertypes/
+/data/raw/gsc_csv_exports/
+/data/processed/
+
+# Paraquet databases
+*.duckdb
