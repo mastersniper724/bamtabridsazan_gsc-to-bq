@@ -23,7 +23,7 @@ from utils.gsc_country_utils import load_country_map, robust_map_country_column
 SITE_URL = "sc-domain:bamtabridsazan.com"
 BQ_PROJECT = "bamtabridsazan"
 BQ_DATASET = "seo_reports"
-BQ_TABLE = "00_06__temp_bamtabridsazan__gsc__raw_domain_data_webtype_fullfetch__base_layer"
+BQ_TABLE = "00_06__temp_bamtabridsazan__gsc__raw_domain_data_webtype_fullfetch"
 ROW_LIMIT = 25000
 RETRY_DELAY = 60  # seconds
 SERVICE_ACCOUNT_FILE = os.environ.get("SERVICE_ACCOUNT_FILE", "gcp-key.json")
@@ -705,7 +705,7 @@ def main():
     if CSV_TEST_FILE:
         try:
             parts = []
-            if not df_new.empty:
+            if 'df_new' in locals() and not df_new.empty:
                 df_new = robust_map_country_column(df_new, "Country", COUNTRY_MAP)
                 parts.append(df_new)
             if 'df_noindex' in locals() and not df_noindex.empty:
